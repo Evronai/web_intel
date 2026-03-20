@@ -1164,13 +1164,15 @@ function display(data, url, fromCache) {
     const col = d > 0 ? 'var(--accent2)' : 'var(--danger)';
     return ` <span style="color:${col};font-size:0.65rem">${d > 0 ? '▲' : '▼'}${Math.abs(d)}</span>`;
   }
+  // JS-render warning
+  const warn = document.getElementById('jsWarn');
   if (meta?.isJSRendered) {
     const framework = meta.jsFramework ? ` (${meta.jsFramework} detected)` : '';
     setText('jsWarnTitle', `JavaScript-rendered site detected${framework}`);
     setText('jsWarnBody', `Scores reflect the static HTML shell only — ${meta.bodyWordCount} words of visible content before JS executes. This is what search engine crawlers see without JS execution. For accurate on-page SEO, consider server-side rendering or pre-rendering.`);
-    warn.style.display = 'flex';
+    if (warn) warn.style.display = 'flex';
   } else {
-    warn.style.display = 'none';
+    if (warn) warn.style.display = 'none';
   }
 
   // Header
