@@ -674,7 +674,27 @@ footer strong { color: var(--text); }
 }
 .logo-preview.show { display: block; }
 
-/* ── Fade-in ── */
+/* ── Competitor table ── */
+.comp-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin-top: 14px; }
+.comp-table th { text-align: left; padding: 10px 14px; border-bottom: 2px solid var(--border); font-size: 0.68rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.comp-table td { padding: 10px 14px; border-bottom: 1px solid var(--border); color: var(--text); }
+.comp-table tr:last-child td { border: none; }
+.comp-table .winner { color: var(--accent2); font-weight: 700; }
+.comp-table .loser  { color: var(--danger); }
+.comp-table .target-row td { background: var(--accent-dim); font-weight: 600; }
+.comp-loading { text-align: center; padding: 32px; color: var(--muted); font-size: 0.85rem; }
+
+/* ── Business impact ── */
+.impact-pill {
+  display: inline-block; font-size: 0.68rem; font-weight: 700;
+  padding: 2px 8px; border-radius: 20px; margin-right: 6px;
+  background: rgba(245,158,11,0.12); color: var(--accent);
+  text-transform: uppercase; letter-spacing: 0.06em;
+}
+
+/* ── Sparkline ── */
+.spark-wrap { position: relative; }
+canvas { display: block; width: 100% !important; height: 40px !important; }
 .card, .results-card, .loading-card {
   animation: fadein 0.3s ease;
 }
@@ -752,6 +772,30 @@ footer strong { color: var(--text); }
       <button class="run-btn" id="runBtn" onclick="run()">
         <i class="fas fa-play"></i> Analyse
       </button>
+    </div>
+
+    <!-- Context fields -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px">
+      <div class="key-group">
+        <div class="key-lbl"><i class="fas fa-industry"></i> Industry / Niche</div>
+        <input type="text" class="key-input" id="industryInput" placeholder="e.g. Cosmetics, Retail, Legal" style="font-family:'Outfit',sans-serif">
+        <div class="key-note">Used for industry benchmarking in the report</div>
+      </div>
+      <div class="key-group">
+        <div class="key-lbl"><i class="fas fa-globe-americas"></i> Region</div>
+        <input type="text" class="key-input" id="regionInput" placeholder="e.g. Trinidad, Caribbean, UK" style="font-family:'Outfit',sans-serif">
+        <div class="key-note">Tailors local SEO signals to your market</div>
+      </div>
+    </div>
+
+    <!-- Competitor URLs -->
+    <div style="margin-top:14px">
+      <div class="key-lbl" style="margin-bottom:8px"><i class="fas fa-users"></i> Competitor URLs <span style="font-size:0.65rem;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;margin-left:4px">— optional, up to 2</span></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <input type="url" class="key-input" id="comp1" placeholder="https://competitor-one.com" style="font-family:'JetBrains Mono',monospace;font-size:0.78rem">
+        <input type="url" class="key-input" id="comp2" placeholder="https://competitor-two.com" style="font-family:'JetBrains Mono',monospace;font-size:0.78rem">
+      </div>
+      <div class="key-note" style="margin-top:5px">Adds a comparison table to the report</div>
     </div>
 
     <div class="card-label" style="margin-top:26px"><i class="fas fa-sliders-h"></i> Modules</div>
@@ -843,6 +887,7 @@ footer strong { color: var(--text); }
       <button class="tab" onclick="switchTab('seo',this)">SEO</button>
       <button class="tab" onclick="switchTab('aiSearch',this)">AI Search</button>
       <button class="tab" onclick="switchTab('local',this)">Local</button>
+      <button class="tab" id="tab-btn-competitor" style="display:none" onclick="switchTab('competitor',this)">⚔️ Compare</button>
     </div>
 
     <!-- Overview -->
@@ -879,6 +924,29 @@ footer strong { color: var(--text); }
         <div class="insight-body" id="exec-body">Run an analysis to see your report.</div>
       </div>
 
+      <!-- Score trend -->
+      <div id="trend-section" style="display:none;margin-bottom:22px">
+        <div class="sec-hdr"><i class="fas fa-chart-line"></i> Score Trend</div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
+          <div class="score-card" style="padding:14px">
+            <div class="sc-head"><i class="fas fa-shield-alt"></i> Security</div>
+            <canvas id="spark-sec" width="120" height="40"></canvas>
+          </div>
+          <div class="score-card" style="padding:14px">
+            <div class="sc-head"><i class="fas fa-chart-line"></i> SEO</div>
+            <canvas id="spark-seo" width="120" height="40"></canvas>
+          </div>
+          <div class="score-card" style="padding:14px">
+            <div class="sc-head"><i class="fas fa-robot"></i> AI Search</div>
+            <canvas id="spark-ai" width="120" height="40"></canvas>
+          </div>
+          <div class="score-card" style="padding:14px">
+            <div class="sc-head"><i class="fas fa-map-marker-alt"></i> Local</div>
+            <canvas id="spark-local" width="120" height="40"></canvas>
+          </div>
+        </div>
+      </div>
+
       <div class="sec-hdr"><i class="fas fa-list-check"></i> Prioritised Recommendations</div>
       <div class="recs" id="recs-list"><p style="color:var(--muted);font-size:0.8rem">No data yet.</p></div>
     </div>
@@ -905,6 +973,12 @@ footer strong { color: var(--text); }
     <div class="tab-pane" id="tab-local">
       <div class="insight"><div class="insight-head"><i class="fas fa-map-marker-alt"></i> Local Presence</div><div class="insight-body" id="local-body">—</div></div>
       <div class="detail-grid" id="local-details"></div>
+    </div>
+
+    <!-- Competitor Comparison -->
+    <div class="tab-pane" id="tab-competitor">
+      <div class="insight"><div class="insight-head"><i class="fas fa-users"></i> Competitor Comparison</div><div class="insight-body" id="comp-summary">—</div></div>
+      <div id="comp-table"></div>
     </div>
 
   </div>
@@ -1339,10 +1413,53 @@ function detailCard(title, icon, rows) {
 }
 
 // ════════════════════════════════════════
+//  SPARKLINE — canvas score trend chart
+// ════════════════════════════════════════
+function drawSparkline(canvasId, values) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const vals = values.filter(Number.isFinite);
+  if (vals.length < 2) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.offsetWidth || 120;
+  const H = 40;
+  canvas.width = W; canvas.height = H;
+  ctx.clearRect(0, 0, W, H);
+  const min = Math.min(...vals) - 5;
+  const max = Math.max(...vals) + 5;
+  const xStep = W / (vals.length - 1);
+  const yScale = (v) => H - ((v - min) / (max - min)) * (H - 6) - 3;
+  // Gradient fill
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, 'rgba(245,158,11,0.25)');
+  grad.addColorStop(1, 'rgba(245,158,11,0)');
+  ctx.beginPath();
+  ctx.moveTo(0, H);
+  vals.forEach((v, i) => ctx.lineTo(i * xStep, yScale(v)));
+  ctx.lineTo((vals.length - 1) * xStep, H);
+  ctx.closePath();
+  ctx.fillStyle = grad;
+  ctx.fill();
+  // Line
+  ctx.beginPath();
+  vals.forEach((v, i) => i === 0 ? ctx.moveTo(0, yScale(v)) : ctx.lineTo(i * xStep, yScale(v)));
+  ctx.strokeStyle = '#f59e0b';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  // Last point dot
+  const lx = (vals.length - 1) * xStep, ly = yScale(vals[vals.length - 1]);
+  ctx.beginPath(); ctx.arc(lx, ly, 3, 0, Math.PI * 2);
+  ctx.fillStyle = '#f59e0b'; ctx.fill();
+  // Label
+  ctx.fillStyle = '#e8edf7'; ctx.font = '10px Outfit, sans-serif';
+  ctx.fillText(vals[vals.length - 1], Math.max(0, lx - 10), Math.max(12, ly - 5));
+}
+
+// ════════════════════════════════════════
 //  DISPLAY RESULTS
 // ════════════════════════════════════════
 function display(data, url, fromCache) {
-  const { security: sec, seo, aiSearch: ai, local, totalTokens, serpData, meta } = data;
+  const { security: sec, seo, aiSearch: ai, local, totalTokens, serpData, meta, competitors, industry, region } = data;
 
   // Refresh brand header
   updateBrandHeader();
@@ -1417,46 +1534,112 @@ function display(data, url, fromCache) {
   fillCard('ai',    ai,    ai    ? `${ai.optimizationGap ?? 0}% optimisation gap`     : '—', prev?.ai);
   fillCard('local', local, local ? `${local.citations ?? 0} citation signals`         : '—', prev?.local);
 
-  // Executive summary — always textContent, never innerHTML with AI text
-  const parts = [];
-  if (sec)   parts.push(`Security: ${sec.score}/100 — ${sec.criticalIssues ?? 0} critical issue(s).`);
-  if (seo)   parts.push(`SEO: ${seo.score}/100 — ${seo.issues ?? 0} issue(s).`);
-  if (ai)    parts.push(`AI Search: ${ai.score}/100 — ${ai.optimizationGap ?? 0}% gap.`);
-  if (local) parts.push(`Local: ${local.score}/100 — ${local.citations ?? 0} citation signals detected.`);
-  if (fromCache) parts.push('(Loaded from cache.)');
-  setText('exec-body', parts.join(' ') || 'Analysis complete.');
+  // Executive summary — use dedicated AI narrative if available
+  const execData = data.execSummary;
+  if (execData?.narrative) {
+    const execEl = document.getElementById('exec-body');
+    if (execEl) {
+      execEl.textContent = '';
+      if (execData.headline) {
+        const hl = document.createElement('div');
+        hl.style.cssText = 'font-weight:700;font-size:1rem;margin-bottom:8px;color:var(--text)';
+        hl.textContent = execData.headline;
+        execEl.appendChild(hl);
+      }
+      const narr = document.createElement('p');
+      narr.textContent = execData.narrative;
+      execEl.appendChild(narr);
+      if (execData.topPriority) {
+        const pri = document.createElement('div');
+        pri.style.cssText = 'margin-top:10px;padding:10px 14px;background:var(--accent-dim);border-radius:8px;border-left:3px solid var(--accent);font-size:0.85rem';
+        const lbl = document.createElement('span');
+        lbl.style.cssText = 'font-weight:700;color:var(--accent);margin-right:6px';
+        lbl.textContent = '🎯 Top Priority:';
+        pri.appendChild(lbl);
+        const txt = document.createElement('span');
+        txt.textContent = execData.topPriority;
+        pri.appendChild(txt);
+        execEl.appendChild(pri);
+      }
+    }
+  } else {
+    // Fallback to data dump if execSummary failed
+    const parts = [];
+    if (sec)   parts.push(`Security: ${sec.score}/100 — ${sec.criticalIssues ?? 0} critical issue(s).`);
+    if (seo)   parts.push(`SEO: ${seo.score}/100 — ${seo.issues ?? 0} issue(s).`);
+    if (ai)    parts.push(`AI Search: ${ai.score}/100 — ${ai.optimizationGap ?? 0}% gap.`);
+    if (local) parts.push(`Local: ${local.score}/100 — ${local.citations ?? 0} citation signals detected.`);
+    setText('exec-body', parts.join(' ') || 'Analysis complete.');
+  }
 
-  // Recommendations — build DOM safely, no innerHTML with AI content
+  // Recommendations — with business impact
+  const normaliseRecs = (arr) => {
+    if (!arr) return [];
+    return arr.map(r => typeof r === 'string' ? { issue: r, fix: r, businessImpact: null } : r);
+  };
   const allRecs = [
-    ...(sec?.recommendations   || []).map(r => ({ t: r, p: 'critical' })),
-    ...(seo?.recommendations   || []).map(r => ({ t: r, p: 'high' })),
-    ...(ai?.recommendations    || []).map(r => ({ t: r, p: 'medium' })),
-    ...(local?.recommendations || []).map(r => ({ t: r, p: 'medium' })),
+    ...normaliseRecs(sec?.recommendations).map(r => ({ ...r, p: 'critical' })),
+    ...normaliseRecs(seo?.recommendations).map(r => ({ ...r, p: 'high' })),
+    ...normaliseRecs(ai?.recommendations).map(r => ({ ...r, p: 'medium' })),
+    ...normaliseRecs(local?.recommendations).map(r => ({ ...r, p: 'medium' })),
   ].slice(0, 8);
 
   const recList = document.getElementById('recs-list');
   recList.innerHTML = '';
   if (allRecs.length) {
-    allRecs.forEach(({ t, p }) => {
+    allRecs.forEach(({ fix, issue, businessImpact, p }) => {
       const div = document.createElement('div');
       div.className = `rec ${p}`;
       const sev = document.createElement('div');
       sev.className = 'rec-sev';
       sev.textContent = p.charAt(0).toUpperCase() + p.slice(1);
-      const txt = document.createElement('div');
-      txt.className = 'rec-text';
-      txt.textContent = t; // textContent — safe against XSS
+      const body = document.createElement('div');
+      body.className = 'rec-text';
+      const fixText = document.createElement('div');
+      fixText.textContent = fix || issue;
+      body.appendChild(fixText);
+      if (businessImpact) {
+        const imp = document.createElement('div');
+        imp.style.cssText = 'font-size:0.75rem;color:var(--muted);margin-top:4px';
+        const impLbl = document.createElement('span');
+        impLbl.className = 'impact-pill';
+        impLbl.textContent = 'Business impact';
+        imp.appendChild(impLbl);
+        const impTxt = document.createTextNode(businessImpact);
+        imp.appendChild(impTxt);
+        body.appendChild(imp);
+      }
       div.appendChild(sev);
-      div.appendChild(txt);
+      div.appendChild(body);
       recList.appendChild(div);
     });
   } else {
     recList.innerHTML = '<p style="color:var(--muted);font-size:0.8rem">No recommendations generated.</p>';
   }
 
-  // Tab insights — textContent
+  // Tab insights with industry benchmark
+  function buildTabInsight(id, data, prefix) {
+    const el = document.getElementById(id);
+    if (!el || !data) return;
+    el.textContent = '';
+    const s = document.createElement('p');
+    s.textContent = data.summary || '—';
+    el.appendChild(s);
+    if (data.industryBenchmark) {
+      const b = document.createElement('div');
+      b.style.cssText = 'margin-top:8px;font-size:0.78rem;color:var(--muted);display:flex;align-items:center;gap:6px';
+      const lbl = document.createElement('span');
+      lbl.style.cssText = 'font-size:0.65rem;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:var(--accent);background:var(--accent-dim);padding:2px 7px;border-radius:20px';
+      lbl.textContent = industry ? industry + ' benchmark' : 'Industry benchmark';
+      b.appendChild(lbl);
+      const txt = document.createTextNode(data.industryBenchmark);
+      b.appendChild(txt);
+      el.appendChild(b);
+    }
+  }
+
   if (sec) {
-    setText('sec-body', sec.summary || (sec.recommendations?.join(' · ')) || '—');
+    buildTabInsight('sec-body', sec, 'sec');
     document.getElementById('sec-details').innerHTML = detailCard('Security Findings', 'shield-alt', [
       ['Score',              sec.score + '/100'],
       ['Critical Issues',    sec.criticalIssues ?? '—'],
@@ -1467,7 +1650,7 @@ function display(data, url, fromCache) {
   }
 
   if (seo) {
-    setText('seo-body', seo.summary || (seo.recommendations?.join(' · ')) || '—');
+    buildTabInsight('seo-body', seo, 'seo');
     const seoRows = [
       ['Score',          seo.score + '/100'],
       ['Issues',         seo.issues ?? '—'],
@@ -1481,7 +1664,6 @@ function display(data, url, fromCache) {
       ['Schema Markup',  seo.hasSchema ? 'Present' : 'Missing',   seo.hasSchema ? 'ok' : 'warn'],
       ['Canonical Tag',  seo.hasCanonical ? 'Present' : 'Missing', seo.hasCanonical ? 'ok' : 'warn'],
     ];
-
     let serpCard = '';
     if (serpData) {
       serpCard = detailCard('Live SERP Data (SerpAPI)', 'chart-bar', [
@@ -1493,19 +1675,15 @@ function display(data, url, fromCache) {
         ['Top Result Title',   serpData.topResult || '—'],
       ]);
     } else if (!document.getElementById('serpKey').value.trim()) {
-      // Only show the prompt if no key was entered at all
       serpCard = detailCard('Live SERP Data', 'chart-bar', [
         ['Status', 'Add a SerpAPI key for real ranking data', 'warn'],
       ]);
     }
-    // If key entered but failed silently, show nothing rather than a confusing prompt
-
-    document.getElementById('seo-details').innerHTML =
-      detailCard('On-Page Factors', 'chart-line', seoRows) + serpCard;
+    document.getElementById('seo-details').innerHTML = detailCard('On-Page Factors', 'chart-line', seoRows) + serpCard;
   }
 
   if (ai) {
-    setText('ai-body', ai.summary || (ai.recommendations?.join(' · ')) || '—');
+    buildTabInsight('ai-body', ai, 'ai');
     document.getElementById('ai-details').innerHTML = detailCard('AI Readiness Signals', 'robot', [
       ['Score',               ai.score + '/100'],
       ['Optimisation Gap',    (ai.optimizationGap ?? 0) + '%'],
@@ -1517,8 +1695,7 @@ function display(data, url, fromCache) {
   }
 
   if (local) {
-    // Honest disclaimer — AI estimates only, not real grid data
-    setText('local-body', 'These signals are estimated from page content only. For verified grid rank tracking, use LocalFalcon directly. ' + (local.summary || ''));
+    buildTabInsight('local-body', local, 'local');
     document.getElementById('local-details').innerHTML = detailCard('Local Signals (AI-estimated)', 'map-marker-alt', [
       ['Score',             local.score + '/100'],
       ['NAP Consistency',   local.napConsistency || '—'],
@@ -1526,7 +1703,77 @@ function display(data, url, fromCache) {
       ['GBP Signals',       local.hasGBP ? 'Detected' : 'Not found', local.hasGBP ? 'ok' : 'warn'],
       ['Citation Signals',  local.citations ?? '—'],
       ['LocalBusiness Schema', local.hasLocalSchema ? 'Present' : 'Missing', local.hasLocalSchema ? 'ok' : 'warn'],
+      ['Region',            region || 'Not specified'],
     ]);
+  }
+
+  // Score trend sparklines
+  const trendSec = document.getElementById('trend-section');
+  if (hist.length >= 2 && trendSec) {
+    trendSec.style.display = 'block';
+    drawSparkline('spark-sec',   hist.map(h => h.sec));
+    drawSparkline('spark-seo',   hist.map(h => h.seo));
+    drawSparkline('spark-ai',    hist.map(h => h.ai));
+    drawSparkline('spark-local', hist.map(h => h.local));
+  } else if (trendSec) {
+    trendSec.style.display = 'none';
+  }
+
+  // Competitor comparison tab
+  const compBtn = document.getElementById('tab-btn-competitor');
+  const compTable = document.getElementById('comp-table');
+  const compSummary = document.getElementById('comp-summary');
+  if (competitors?.length && compBtn && compTable) {
+    compBtn.style.display = 'inline-block';
+    const scores = [sec?.score, seo?.score, ai?.score, local?.score].filter(Number.isFinite);
+    const overall = scores.length ? Math.round(scores.reduce((a,b)=>a+b,0)/scores.length) : 0;
+    const rows = [
+      { url, security: sec?.score, seo: seo?.score, aiSearch: ai?.score, local: local?.score, overall, isTarget: true },
+      ...competitors,
+    ];
+    // Build comparison table safely
+    const table = document.createElement('table');
+    table.className = 'comp-table';
+    const thead = document.createElement('thead');
+    const hr = document.createElement('tr');
+    ['Site','Security','SEO','AI Search','Local','Overall','Strength','Weakness'].forEach(h => {
+      const th = document.createElement('th'); th.textContent = h; hr.appendChild(th);
+    });
+    thead.appendChild(hr); table.appendChild(thead);
+    const tbody = document.createElement('tbody');
+    rows.forEach(r => {
+      const tr = document.createElement('tr');
+      if (r.isTarget) tr.className = 'target-row';
+      const getOverall = (r) => r.overall || Math.round([r.security,r.seo,r.aiSearch,r.local].filter(Number.isFinite).reduce((a,b)=>a+b,0)/4);
+      const cells = [
+        r.url?.replace(/^https?:\/\/(www\.)?/,'').split('/')[0] || url.replace(/^https?:\/\/(www\.)?/,'').split('/')[0],
+        r.security ?? r.sec ?? '—',
+        r.seo ?? '—',
+        r.aiSearch ?? r.ai ?? '—',
+        r.local ?? '—',
+        r.overall || getOverall(r) || '—',
+        r.topStrength || (r.isTarget ? 'Target site' : '—'),
+        r.topWeakness || '—',
+      ];
+      cells.forEach((c, i) => {
+        const td = document.createElement('td');
+        td.textContent = c;
+        if (i > 0 && i < 6 && !r.isTarget) {
+          const myScore = [overall, sec?.score, seo?.score, ai?.score, local?.score, overall][i];
+          if (typeof c === 'number' && typeof myScore === 'number') {
+            td.className = c > myScore ? 'loser' : c < myScore ? 'winner' : '';
+          }
+        }
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    compTable.innerHTML = '';
+    compTable.appendChild(table);
+    if (compSummary) setText('comp-summary', `Comparison of ${rows.length} sites. Green = better than target. Red = worse than target.`);
+  } else if (compBtn) {
+    compBtn.style.display = 'none';
   }
 
   document.getElementById('resCard').style.display = 'block';
@@ -1537,10 +1784,14 @@ function display(data, url, fromCache) {
 //  MAIN RUN
 // ════════════════════════════════════════
 async function run() {
-  const url     = document.getElementById('urlInput').value.trim();
-  const dsKey   = document.getElementById('deepseekKey').value.trim();
-  const serpKey = document.getElementById('serpKey').value.trim();
-  const btn     = document.getElementById('runBtn');
+  const url      = document.getElementById('urlInput').value.trim();
+  const dsKey    = document.getElementById('deepseekKey').value.trim();
+  const serpKey  = document.getElementById('serpKey').value.trim();
+  const industry = document.getElementById('industryInput').value.trim();
+  const region   = document.getElementById('regionInput').value.trim();
+  const comp1    = document.getElementById('comp1').value.trim();
+  const comp2    = document.getElementById('comp2').value.trim();
+  const btn      = document.getElementById('runBtn');
   const loadCard = document.getElementById('loadCard');
   const resCard  = document.getElementById('resCard');
 
@@ -1589,6 +1840,8 @@ async function run() {
     const ctx = [
       `URL: ${url}`,
       `HTTPS: ${url.startsWith('https') ? 'yes' : 'no'}`,
+      `Industry: ${industry || 'not specified'}`,
+      `Region/Market: ${region || 'not specified'}`,
       `Title: ${m.title || 'none'} (${m.title.length} chars)`,
       `Meta description: ${m.description || 'none'} (${m.description.length} chars)`,
       `Canonical: ${m.canonical || 'none'}`,
@@ -1604,13 +1857,13 @@ async function run() {
       `CSP meta tag: ${m.hasCSP ? 'yes' : 'no'}`,
       `Address/phone signals: ${m.hasAddress ? 'yes' : 'no'} / ${m.hasPhone ? 'yes' : 'no'}`,
       `Detected libraries: ${m.libs.join(', ') || 'none'}`,
+      `JS rendered: ${m.isJSRendered ? 'yes' : 'no'}`,
+      `Visible word count: ${m.bodyWordCount}`,
       `Page text (excerpt): ${body}`,
     ].join('\n');
 
-    const SYS = `You are an expert digital analyst. Respond ONLY with valid JSON matching the exact schema. No prose, no markdown fences, no explanation — raw JSON only.`;
-
     // Stage 3 — Parallel AI calls
-    setProgress(30, 'Running AI analysis…', `${enabled.length} module(s) in parallel`);
+    setProgress(30, 'Running AI analysis…', `${enabled.length} module(s) + executive summary in parallel`);
     setStages([
       { l: 'Fetch website',   s: 'done' },
       { l: 'Extract content', s: 'done' },
@@ -1620,30 +1873,51 @@ async function run() {
 
     const tasks = {};
 
-    const RUBRIC = `Scoring rubric: 85-100=excellent (industry best practice), 70-84=good (minor gaps), 50-69=needs improvement (meaningful issues), 30-49=poor (significant problems), 0-29=critical (major failures). Be accurate and consistent — do not inflate scores.`;
+    const RUBRIC = `Scoring rubric (be accurate, never inflate): 85-100=excellent (industry best practice), 70-84=good (minor gaps), 50-69=needs improvement (meaningful issues), 30-49=poor (significant problems), 0-29=critical (major failures).${industry ? ` Benchmark scores against typical ${industry} industry standards.` : ''}`;
+
+    const siteDomain = url.replace(/^https?:\/\/(www\.)?/,'').split('/')[0];
 
     if (mods.security) tasks.security = callDS(SYS,
-      `Analyse this website for security issues.\n${ctx}\n\n${RUBRIC}\n\nReturn ONLY:\n{"score":<0-100>,"criticalIssues":<n>,"hasCSP":<bool>,"outdatedLibs":[<strings>],"summary":"<2 sentences>","recommendations":["<actionable fix>",...]}`,
-      dsKey, 700);
+      `Analyse this website for security issues.\n${ctx}\n\n${RUBRIC}\n\nReturn ONLY:\n{"score":<0-100>,"criticalIssues":<n>,"hasCSP":<bool>,"outdatedLibs":[<strings>],"industryBenchmark":"<how this score compares to typical ${industry||'similar'} sites>","summary":"<3-4 sentences: what works, what is critical, specific site context — not generic>","recommendations":[{"issue":"<specific issue>","fix":"<actionable fix>","businessImpact":"<plain English: what this costs the business>"},...]}`,
+      dsKey, 900);
 
     if (mods.seo) tasks.seo = callDS(SYS,
-      `Analyse this website for technical SEO.\n${ctx}\n\n${RUBRIC}\n\nReturn ONLY:\n{"score":<0-100>,"issues":<n>,"titleLength":<n>,"metaLength":<n>,"h1Count":<n>,"h2Count":<n>,"totalImages":<n>,"imagesWithAlt":<n>,"hasSchema":<bool>,"hasCanonical":<bool>,"summary":"<2 sentences>","recommendations":["<actionable fix>",...]}`,
-      dsKey, 700);
+      `Analyse this website for technical SEO.\n${ctx}\n\n${RUBRIC}\n\nReturn ONLY:\n{"score":<0-100>,"issues":<n>,"titleLength":<n>,"metaLength":<n>,"h1Count":<n>,"h2Count":<n>,"totalImages":<n>,"imagesWithAlt":<n>,"hasSchema":<bool>,"hasCanonical":<bool>,"industryBenchmark":"<how this score compares to typical ${industry||'similar'} sites>","summary":"<3-4 sentences: what works, biggest gaps, specific findings — reference actual title/meta content>","recommendations":[{"issue":"<specific issue>","fix":"<actionable fix>","businessImpact":"<plain English: what this costs the business>"},...]}`,
+      dsKey, 900);
 
     if (mods.aiSearch) tasks.aiSearch = callDS(SYS,
-      `Analyse this website for AI search engine optimisation (ChatGPT, Perplexity, Google AI Overviews).\n${ctx}\n\n${RUBRIC}\n\nReturn ONLY:\n{"score":<0-100>,"optimizationGap":<0-100>,"conversationalScore":<0-100>,"questionScore":<0-100>,"snippetPotential":<0-100>,"hasFAQ":<bool>,"summary":"<2 sentences>","recommendations":["<actionable fix>",...]}`,
-      dsKey, 700);
+      `Analyse this website for AI search engine optimisation (ChatGPT, Perplexity, Google AI Overviews).\n${ctx}\n\n${RUBRIC}\n\nReturn ONLY:\n{"score":<0-100>,"optimizationGap":<0-100>,"conversationalScore":<0-100>,"questionScore":<0-100>,"snippetPotential":<0-100>,"hasFAQ":<bool>,"industryBenchmark":"<how this score compares to typical ${industry||'similar'} sites>","summary":"<3-4 sentences: specific AI search readiness assessment, what content types are missing, opportunity size>","recommendations":[{"issue":"<specific issue>","fix":"<actionable fix>","businessImpact":"<plain English: what this costs the business>"},...]}`,
+      dsKey, 900);
 
     if (mods.local) tasks.local = callDS(SYS,
-      `Analyse this website for local SEO signals. Base assessment ONLY on signals visible in the provided data. Do not fabricate grid rankings.\n${ctx}\n\n${RUBRIC}\n\nReturn ONLY:\n{"score":<0-100>,"napConsistency":"<Consistent|Inconsistent|Not detected>","localKeywords":<n>,"hasGBP":<bool>,"citations":<estimated n>,"hasLocalSchema":<bool>,"summary":"<2 sentences, honest about what is and is not detectable>","recommendations":["<actionable fix>",...]}`,
-      dsKey, 700);
+      `Analyse this website for local SEO signals. Region: ${region || 'not specified'}. Base assessment ONLY on signals visible in the provided data.\n${ctx}\n\n${RUBRIC}\n\nReturn ONLY:\n{"score":<0-100>,"napConsistency":"<Consistent|Inconsistent|Not detected>","localKeywords":<n>,"hasGBP":<bool>,"citations":<estimated n>,"hasLocalSchema":<bool>,"industryBenchmark":"<how this score compares to typical ${industry||'similar'} sites in ${region||'this region'}>","summary":"<3-4 sentences: honest local SEO assessment, specific regional context if region provided, what is and is not detectable>","recommendations":[{"issue":"<specific issue>","fix":"<actionable fix>","businessImpact":"<plain English: what this costs the business>"},...]}`,
+      dsKey, 900);
+
+    // Executive summary — separate AI call for a proper narrative
+    tasks.execSummary = callDS(SYS,
+      `Write an executive summary for a website intelligence report.\nURL: ${url}\nDomain: ${siteDomain}\nIndustry: ${industry || 'not specified'}\nRegion: ${region || 'not specified'}\nOverall score: will be calculated from Security, SEO, AI Search, Local scores.\nKey data:\n${ctx}\n\nReturn ONLY:\n{"headline":"<one punchy sentence verdict — specific to this site>","narrative":"<3-5 sentences: what the site does well, the 2-3 most impactful issues, what fixing them would mean for the business — write as a consultant, not a bot>","topPriority":"<the single highest-ROI action they should take first>"}`,
+      dsKey, 600);
 
     // SerpAPI — runs in parallel, adds real SERP data to SEO tab
     const serpPromise = serpKey ? callSerpAPI(url, serpKey) : Promise.resolve(null);
 
-    // Run all in parallel — AI modules + SerpAPI simultaneously
+    // Competitor analysis — fetch and analyse each competitor
+    const compUrls = [comp1, comp2].filter(u => u && u.startsWith('http'));
+    const compPromises = compUrls.map(async (cUrl) => {
+      try {
+        const cHtml = await fetchSite(cUrl);
+        const { m: cm, body: cb } = extractContent(cHtml);
+        const cCtx = `URL: ${cUrl}\nTitle: ${cm.title}\nH1: ${cm.h1}|H2: ${cm.h2}\nSchema: ${cm.hasSchema}\nMeta desc: ${cm.description.length} chars\nVisible words: ${cm.bodyWordCount}\nLibs: ${cm.libs.join(',')||'none'}`;
+        const cRes = await callDS(SYS,
+          `Score this website across 4 dimensions. Be consistent with scores you gave the main site.\n${cCtx}\n\n${RUBRIC}\n\nReturn ONLY:\n{"url":"${cUrl}","security":<0-100>,"seo":<0-100>,"aiSearch":<0-100>,"local":<0-100>,"overall":<avg>,"topStrength":"<one thing they do better>","topWeakness":"<one thing they do worse>"}`,
+          dsKey, 400);
+        return parseJSON(cRes.text);
+      } catch { return null; }
+    });
+
+    // Run everything in parallel
     let serpData = null;
-    const [settled, serpResult] = await Promise.all([
+    const [settled, serpResult, ...compResults] = await Promise.all([
       Promise.allSettled(
         Object.entries(tasks).map(async ([key, p]) => {
           const r = await p;
@@ -1652,6 +1926,7 @@ async function run() {
         })
       ),
       serpPromise.catch(e => { showErr('SerpAPI: ' + e.message); return null; }),
+      ...compPromises,
     ]);
     serpData = serpResult;
 
@@ -1664,7 +1939,7 @@ async function run() {
       { l: 'Build report',    s: 'active' },
     ]);
 
-    const analysisData = { totalTokens: 0, serpData, meta: m, tokenBreakdown: {} };
+    const analysisData = { totalTokens: 0, serpData, meta: m, tokenBreakdown: {}, competitors: compResults.filter(Boolean), industry, region };
     let parseFailures = 0;
     settled.forEach(s => {
       if (s.status === 'fulfilled' && s.value?.parsed) {
@@ -1711,13 +1986,12 @@ async function run() {
     setCache(url, analysisData);
 
     // Record score history for delta tracking
-    const domain = url.replace(/^https?:\/\/(www\.)?/,'').split('/')[0];
-    if (!HISTORY.has(domain)) HISTORY.set(domain, []);
+    if (!HISTORY.has(siteDomain)) HISTORY.set(siteDomain, []);
     const scores = analysisData;
     const overallNow = [scores.security?.score, scores.seo?.score, scores.aiSearch?.score, scores.local?.score]
       .filter(Number.isFinite);
     if (overallNow.length) {
-      HISTORY.get(domain).push({
+      HISTORY.get(siteDomain).push({
         ts: Date.now(),
         overall: Math.round(overallNow.reduce((a,b)=>a+b,0)/overallNow.length),
         sec:   scores.security?.score  ?? null,
@@ -1725,9 +1999,8 @@ async function run() {
         ai:    scores.aiSearch?.score  ?? null,
         local: scores.local?.score     ?? null,
       });
-      // Keep last 10 analyses per domain
-      const h = HISTORY.get(domain);
-      if (h.length > 10) HISTORY.set(domain, h.slice(-10));
+      const h = HISTORY.get(siteDomain);
+      if (h.length > 10) HISTORY.set(siteDomain, h.slice(-10));
     }
 
     setProgress(100, 'Analysis complete!', '');
