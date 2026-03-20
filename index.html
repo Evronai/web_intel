@@ -1086,54 +1086,72 @@ async function callSerpAPI(domain, serpKey) {
   if (!serpKey) return null;
 
   const cleanDomain = domain.replace(/^https?:\/\/(www\.)?/, '').split('/')[0];
+  const serpUrl = `https://serpapi.com/search.json?api_key=${encodeURIComponent(serpKey)}&engine=google&q=${encodeURIComponent('site:' + cleanDomain)}&num=10`;
 
-  try {
-    // SerpAPI blocks direct browser requests (CORS). Route through proxy.
-    const serpUrl = `https://serpapi.com/search.json?api_key=${encodeURIComponent(serpKey)}&engine=google&q=${encodeURIComponent('site:' + cleanDomain)}&num=10`;
-    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(serpUrl)}`;
+  // Try two proxies for SerpAPI
+  const proxies = [
+    `https://api.allorigins.win/get?url=${encodeURIComponent(serpUrl)}`,
+    `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(serpUrl)}`,
+  ];
 
-    const resp = await fetch(proxyUrl, { signal: AbortSignal.timeout(12000) });
-    if (!resp.ok) return null;
+  let lastErr = '';
+  for (const proxyUrl of proxies) {
+    try {
+      const resp = await fetch(proxyUrl, { signal: AbortSignal.timeout(12000) });
+      if (!resp.ok) { lastErr = `HTTP ${resp.status}`; continue; }
 
-    const wrapper = await resp.json();
-    const text = wrapper.contents;
-    if (!text) return null;
+      // allorigins wraps in {contents:...}, codetabs returns raw
+      let text;
+      const ct = resp.headers.get('content-type') || '';
+      if (ct.includes('application/json')) {
+        const wrapper = await resp.json();
+        text = wrapper.contents || JSON.stringify(wrapper);
+      } else {
+        text = await resp.text();
+      }
 
-    let data;
-    try { data = JSON.parse(text); } catch { return null; }
+      if (!text || text.length < 10) { lastErr = 'empty response'; continue; }
 
-    // SerpAPI error responses
-    if (data.error) {
-      if (data.error.includes('Invalid API key') || data.error.includes('authenticate'))
-        throw new Error('Invalid SerpAPI key — check your key at serpapi.com');
-      if (data.error.includes('limit') || data.error.includes('quota'))
-        throw new Error('SerpAPI monthly limit reached (100 searches/month on free tier)');
-      console.warn('SerpAPI error:', data.error);
-      return null;
+      let data;
+      try { data = JSON.parse(text); } catch { lastErr = 'JSON parse failed'; continue; }
+
+      // SerpAPI error responses
+      if (data.error) {
+        if (/invalid.*api.*key|authenticate|unauthorized/i.test(data.error))
+          throw new Error('Invalid SerpAPI key — check your key at serpapi.com');
+        if (/limit|quota|credit/i.test(data.error))
+          throw new Error('SerpAPI monthly limit reached (100 searches/month on free tier)');
+        console.warn('SerpAPI error:', data.error);
+        return null;
+      }
+
+      const result = {
+        indexedPages:      data.search_information?.total_results || 0,
+        hasFeaturedSnip:   !!data.answer_box,
+        hasKnowledgePanel: !!data.knowledge_graph,
+        sitelinks:         data.organic_results?.[0]?.sitelinks?.length || 0,
+        topResult:         data.organic_results?.[0]?.title || null,
+        topResultUrl:      data.organic_results?.[0]?.link  || null,
+        searchAppearance:  [],
+      };
+
+      if (result.hasFeaturedSnip)   result.searchAppearance.push('Featured snippet');
+      if (result.hasKnowledgePanel) result.searchAppearance.push('Knowledge panel');
+      if (result.sitelinks > 0)     result.searchAppearance.push(`Sitelinks (${result.sitelinks})`);
+      if (!result.searchAppearance.length) result.searchAppearance.push('Standard listing');
+
+      return result;
+
+    } catch(e) {
+      if (e.message.includes('SerpAPI') || e.message.includes('serpapi')) throw e;
+      lastErr = e.message;
+      continue;
     }
-
-    const result = {
-      indexedPages:      data.search_information?.total_results || 0,
-      hasFeaturedSnip:   !!data.answer_box,
-      hasKnowledgePanel: !!data.knowledge_graph,
-      sitelinks:         data.organic_results?.[0]?.sitelinks?.length || 0,
-      topResult:         data.organic_results?.[0]?.title || null,
-      topResultUrl:      data.organic_results?.[0]?.link  || null,
-      searchAppearance:  [],
-    };
-
-    if (result.hasFeaturedSnip)   result.searchAppearance.push('Featured snippet');
-    if (result.hasKnowledgePanel) result.searchAppearance.push('Knowledge panel');
-    if (result.sitelinks > 0)     result.searchAppearance.push(`Sitelinks (${result.sitelinks})`);
-    if (!result.searchAppearance.length) result.searchAppearance.push('Standard listing');
-
-    return result;
-  } catch(e) {
-    // Surface key errors to the user, swallow other failures gracefully
-    if (e.message.includes('SerpAPI') || e.message.includes('serpapi')) throw e;
-    console.warn('SerpAPI fetch failed:', e.message);
-    return null;
   }
+
+  // Both proxies failed — log but don't crash the analysis
+  console.warn('SerpAPI unavailable:', lastErr);
+  return null;
 }
 function cKey(url) { return url + JSON.stringify(mods); }
 function getCache(url) {
@@ -1311,11 +1329,13 @@ function display(data, url, fromCache) {
         ['Search Appearance',  serpData.searchAppearance.join(', ') || 'Standard listing'],
         ['Top Result Title',   serpData.topResult || '—'],
       ]);
-    } else {
+    } else if (!document.getElementById('serpKey').value.trim()) {
+      // Only show the prompt if no key was entered at all
       serpCard = detailCard('Live SERP Data', 'chart-bar', [
         ['Status', 'Add a SerpAPI key for real ranking data', 'warn'],
       ]);
     }
+    // If key entered but failed silently, show nothing rather than a confusing prompt
 
     document.getElementById('seo-details').innerHTML =
       detailCard('On-Page Factors', 'chart-line', seoRows) + serpCard;
