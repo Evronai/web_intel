@@ -242,8 +242,10 @@ body {
   background: rgba(248,113,113,0.06); border: 1px solid rgba(248,113,113,0.2);
   border-radius: 10px; padding: 14px 18px;
   font-size: 0.875rem; color: var(--danger);
-  align-items: center; gap: 10px; margin-bottom: 16px;
+  align-items: flex-start; gap: 10px; margin-bottom: 16px;
 }
+.error-box i { margin-top: 2px; flex-shrink: 0; }
+.error-box span { white-space: pre-line; line-height: 1.6; }
 
 /* ══════════════════════
    LOADING
@@ -671,10 +673,6 @@ footer strong { color: var(--text); }
         </div>
         <input type="password" class="key-input" id="serpKey" placeholder="Free tier: 100 searches/month" oninput="onSerpInput()">
         <div class="key-note">Adds real SERP rankings · Free tier at <a href="https://serpapi.com" target="_blank" style="color:var(--accent)">serpapi.com</a></div>
-        <div id="serp-warn" style="display:none;align-items:flex-start;gap:7px;background:rgba(251,146,60,0.06);border:1px solid rgba(251,146,60,0.2);border-radius:7px;padding:9px 11px;margin-top:4px">
-          <i class="fas fa-exclamation-triangle" style="color:var(--warn);font-size:11px;margin-top:2px;flex-shrink:0"></i>
-          <span style="font-size:0.72rem;color:var(--muted);line-height:1.5">Your SerpAPI key is sent via a CORS proxy in the URL query string — proxy operators can log it. For production use, call SerpAPI server-side instead.</span>
-        </div>
       </div>
     </div>
   </div>
@@ -986,20 +984,51 @@ function parseJSON(text) {
 //  FETCH — two proxy fallbacks
 // ════════════════════════════════════════
 async function fetchSite(url) {
-  const proxies = [
-    `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
-    `https://corsproxy.io/?${encodeURIComponent(url)}`,
+  const enc = encodeURIComponent(url);
+
+  // Proxy list — tried in order, first success wins
+  // Different proxies handle different sites — more fallbacks = higher success rate
+  const attempts = [
+    // allorigins — most reliable, returns {contents: html}
+    { url: `https://api.allorigins.win/get?url=${enc}`, parse: d => d.contents },
+    // corsproxy.io — returns raw HTML body
+    { url: `https://corsproxy.io/?${enc}`, parse: d => d },
+    // thingproxy — alternative CORS proxy
+    { url: `https://thingproxy.freeboard.io/fetch/${url}`, parse: d => d },
+    // htmlpreview proxy
+    { url: `https://api.codetabs.com/v1/proxy?quest=${enc}`, parse: d => d },
   ];
-  for (const p of proxies) {
+
+  const errors = [];
+  for (const attempt of attempts) {
     try {
-      const r = await fetch(p, { signal: AbortSignal.timeout(12000) });
-      if (!r.ok) continue;
-      const d = await r.json();
-      const html = d.contents || d;
+      const r = await fetch(attempt.url, { signal: AbortSignal.timeout(10000) });
+      if (!r.ok) { errors.push(`${attempt.url.split('/')[2]}: HTTP ${r.status}`); continue; }
+      // Try JSON first (allorigins), fallback to text (raw proxies)
+      let html;
+      const ct = r.headers.get('content-type') || '';
+      if (ct.includes('application/json')) {
+        const d = await r.json();
+        html = attempt.parse(d);
+      } else {
+        html = await r.text();
+      }
       if (typeof html === 'string' && html.length > 200) return html;
-    } catch { continue; }
+      errors.push(`${attempt.url.split('/')[2]}: empty response`);
+    } catch(e) {
+      errors.push(`${attempt.url.split('/')[2]}: ${e.message}`);
+      continue;
+    }
   }
-  throw new Error('Could not load the website. Check the URL is publicly accessible.');
+
+  // All proxies failed — give a helpful, specific error
+  throw new Error(
+    `Could not fetch the website. This usually means:\n` +
+    `• The site blocks automated requests (common for large retailers)\n` +
+    `• All CORS proxies are rate-limited right now — try again in a minute\n` +
+    `• The URL is incorrect or the site is down\n\n` +
+    `Technical details: ${errors.slice(0,2).join(' · ')}`
+  );
 }
 
 // ════════════════════════════════════════
@@ -1032,9 +1061,6 @@ function onSerpInput() {
   const p = document.getElementById('serp-pill');
   p.className = 'key-pill ' + (v ? 'ok' : 'opt');
   p.textContent = v ? 'Connected' : 'Optional';
-  // Privacy warning — key goes through allorigins proxy in URL
-  const warn = document.getElementById('serp-warn');
-  if (warn) warn.style.display = v ? 'flex' : 'none';
 }
 
 // ════════════════════════════════════════
