@@ -1871,6 +1871,7 @@ async function run() {
       { l: 'Build report',    s: '' },
     ]);
 
+    const SYS = `You are an expert digital analyst producing reports for a professional consultancy. Respond ONLY with valid JSON matching the exact schema. No prose, no markdown fences, no explanation — raw JSON only.`;
     const tasks = {};
 
     const RUBRIC = `Scoring rubric (be accurate, never inflate): 85-100=excellent (industry best practice), 70-84=good (minor gaps), 50-69=needs improvement (meaningful issues), 30-49=poor (significant problems), 0-29=critical (major failures).${industry ? ` Benchmark scores against typical ${industry} industry standards.` : ''}`;
