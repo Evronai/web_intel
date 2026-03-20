@@ -970,13 +970,27 @@ function extractContent(html) {
 }
 
 // ════════════════════════════════════════
-//  JSON PARSING — multiple fallbacks
+//  JSON PARSING — aggressive multi-fallback
 // ════════════════════════════════════════
 function parseJSON(text) {
   if (!text) return null;
-  try { return JSON.parse(text); } catch {}
-  const obj = text.match(/\{[\s\S]*\}/);
+  // Strip markdown code fences (```json ... ``` or ``` ... ```)
+  let clean = text
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```\s*$/, '')
+    .trim();
+  // Try direct parse first
+  try { return JSON.parse(clean); } catch {}
+  // Try extracting first JSON object
+  const obj = clean.match(/\{[\s\S]*\}/);
   if (obj) { try { return JSON.parse(obj[0]); } catch {} }
+  // Try extracting first JSON array
+  const arr = clean.match(/\[[\s\S]*\]/);
+  if (arr) { try { return JSON.parse(arr[0]); } catch {} }
+  // Last resort: find JSON after any label like "json\n{" 
+  const afterLabel = clean.replace(/^[a-z]+\s*\n/i, '');
+  try { return JSON.parse(afterLabel); } catch {}
+  console.warn('parseJSON failed on:', text.substring(0, 200));
   return null;
 }
 
@@ -1450,7 +1464,8 @@ async function run() {
       Promise.allSettled(
         Object.entries(tasks).map(async ([key, p]) => {
           const r = await p;
-          return { key, parsed: parseJSON(r.text), tokens: r.tokens };
+          const parsed = parseJSON(r.text);
+          return { key, parsed, tokens: r.tokens, rawText: r.text };
         })
       ),
       serpPromise.catch(e => { showErr('SerpAPI: ' + e.message); return null; }),
@@ -1467,14 +1482,25 @@ async function run() {
     ]);
 
     const analysisData = { totalTokens: 0, serpData, meta: m, tokenBreakdown: {} };
+    let parseFailures = 0;
     settled.forEach(s => {
       if (s.status === 'fulfilled' && s.value?.parsed) {
         analysisData[s.value.key] = s.value.parsed;
         const t = s.value.tokens || 0;
         analysisData.totalTokens += t;
         analysisData.tokenBreakdown[s.value.key] = t;
+      } else if (s.status === 'fulfilled') {
+        parseFailures++;
+        console.warn('Module parse failed:', s.value?.key, '— raw text:', s.value?.rawText?.substring(0,200));
+      } else {
+        parseFailures++;
+        console.warn('Module rejected:', s.reason);
       }
     });
+
+    if (parseFailures === enabled.length) {
+      throw new Error('AI returned responses that could not be parsed. Check your DeepSeek API key has credits and try again.');
+    }
 
     // Merge ground-truth extracted metadata over AI estimates
     // (things AI can accurately read from our structured context, we verify here)
