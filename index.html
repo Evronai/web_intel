@@ -1310,22 +1310,33 @@ async function fetchSite(url) {
 //  DEEPSEEK — deepseek-chat only (no reasoner)
 // ════════════════════════════════════════
 async function callDS(system, user, key, maxTokens = 900) {
-  const r = await fetch('https://api.deepseek.com/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
-    body: JSON.stringify({
-      model: 'deepseek-chat',
-      messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
-      temperature: 0.15,
-      max_tokens: maxTokens
-    })
-  });
+  let r;
+  try {
+    r = await fetch('https://api.deepseek.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
+      body: JSON.stringify({
+        model: 'deepseek-chat',
+        messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+        temperature: 0.15,
+        max_tokens: maxTokens
+      })
+    });
+  } catch(netErr) {
+    // Network-level failure — CORS, DNS, or connectivity
+    throw new Error(`Network error reaching DeepSeek API — check your internet connection. (${netErr.message})`);
+  }
+
   if (!r.ok) {
     const e = await r.json().catch(() => ({}));
     const msg = e.error?.message || `HTTP ${r.status}`;
-    if (r.status === 401) throw new Error('Invalid DeepSeek API key — check your key');
-    if (r.status === 429) throw new Error('DeepSeek rate limit hit — please wait a moment');
-    throw new Error('DeepSeek error: ' + msg);
+    if (r.status === 401 || r.status === 403)
+      throw new Error(`DeepSeek API key rejected (HTTP ${r.status}) — please check the key is correct and active at platform.deepseek.com`);
+    if (r.status === 429)
+      throw new Error('DeepSeek rate limit hit — please wait a moment and try again');
+    if (r.status === 402)
+      throw new Error('DeepSeek account has insufficient credits — please top up at platform.deepseek.com');
+    throw new Error(`DeepSeek error (${r.status}): ${msg}`);
   }
   const d = await r.json();
   return { text: d.choices?.[0]?.message?.content || '', tokens: d.usage?.total_tokens || 0 };
