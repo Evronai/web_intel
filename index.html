@@ -1866,7 +1866,7 @@ function display(data, url, fromCache) {
       ['Citation Signals',  local.citations ?? '—'],
       ['LocalBusiness Schema', local.hasLocalSchema ? 'Present' : 'Missing', local.hasLocalSchema ? 'ok' : 'warn'],
       ['Region',            region || 'Not specified'],
-      ['Pages Crawled',     data.meta?.crawledPages ?? '1'],
+      ['Pages Crawled',     `${data.meta?.crawledPages ?? 1} of ${data.meta?.pagesAttempted ?? 1} attempted`],
     ]);
   }
 
@@ -2027,37 +2027,42 @@ async function run() {
       pagesToCheck.map(async (pageUrl) => {
         try {
           const pageHtml = await fetchSite(pageUrl);
-          return extractContent(pageHtml);
-        } catch { return null; }
+          const extracted = extractContent(pageHtml);
+          return { ...extracted, pageUrl, success: true };
+        } catch { return { pageUrl, success: false }; }
       })
     );
 
     // Merge NAP signals across all pages
-    const allPages = [{ m, body, pageUrl: url }, ...subPageResults
-      .filter(r => r.status === 'fulfilled' && r.value)
-      .map((r, i) => ({ ...r.value, pageUrl: pagesToCheck[i] }))
-    ];
+    const subPageData = subPageResults
+      .filter(r => r.status === 'fulfilled' && r.value?.success)
+      .map(r => r.value);
 
-    // Track which specific pages were crawled and what they contained
+    const allPages = [{ m, body, pageUrl: url }, ...subPageData];
+
+    // Track which specific pages were successfully crawled
+    const successfulSubPages = subPageData.map(p => p.pageUrl);
     const contactPagesCrawled = allPages
       .filter(p => /contact|about|store|location/i.test(p.pageUrl || ''))
       .map(p => ({
         url: p.pageUrl,
-        hasAddress: p.m.hasAddress,
-        hasPhone:   p.m.hasPhone,
+        hasAddress: p.m?.hasAddress || false,
+        hasPhone:   p.m?.hasPhone   || false,
       }));
 
     // A signal is TRUE if found on ANY crawled page
     const merged = {
-      hasAddress:          allPages.some(p => p.m.hasAddress),
-      hasPhone:            allPages.some(p => p.m.hasPhone),
-      hasLocalBiz:         allPages.some(p => p.m.hasLocalBiz),
-      hasFAQ:              allPages.some(p => p.m.hasFAQ),
-      hasSchema:           allPages.some(p => p.m.hasSchema),
+      hasAddress:          allPages.some(p => p.m?.hasAddress),
+      hasPhone:            allPages.some(p => p.m?.hasPhone),
+      hasLocalBiz:         allPages.some(p => p.m?.hasLocalBiz),
+      hasFAQ:              allPages.some(p => p.m?.hasFAQ),
+      hasSchema:           allPages.some(p => p.m?.hasSchema),
       hasContactPage:      contactPagesCrawled.length > 0,
       contactPagesDetail:  contactPagesCrawled,
-      pagesWithContact:    allPages.filter(p => p.m.hasAddress || p.m.hasPhone).length,
+      pagesWithContact:    allPages.filter(p => p.m?.hasAddress || p.m?.hasPhone).length,
       crawledPages:        allPages.length,
+      pagesFetched:        [url, ...successfulSubPages],
+      pagesAttempted:      pagesToCheck.length + 1,
     };
 
     setProgress(20, 'Extracting content…', `Analysed ${merged.crawledPages} pages`);
@@ -2068,7 +2073,7 @@ async function run() {
       `HTTPS: ${url.startsWith('https') ? 'yes' : 'no'}`,
       `Industry: ${industry || 'not specified'}`,
       `Region/Market: ${region || 'not specified'}`,
-      `Pages crawled: ${merged.crawledPages} (homepage + sub-pages)`,
+      `Pages crawled: ${merged.crawledPages} of ${merged.pagesAttempted} attempted — fetched: ${merged.pagesFetched.map(p=>p.replace(/^https?:\/\/(www\.)?/,'')).join(', ')}`,
       `Title: ${m.title || 'none'} (${m.title.length} chars)`,
       `Meta description: ${m.description || 'none'} (${m.description.length} chars)`,
       `Canonical: ${m.canonical || 'none'}`,
