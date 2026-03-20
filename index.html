@@ -633,6 +633,42 @@ footer strong { color: var(--text); }
   .mod-card { padding: 12px; }
 }
 
+/* ── Branding ── */
+.brand-header {
+  display: none;
+  align-items: center; gap: 14px;
+  padding-bottom: 18px; margin-bottom: 18px;
+  border-bottom: 1px solid var(--border);
+}
+.brand-header.show { display: flex; }
+.brand-logo {
+  height: 44px; max-width: 120px; border-radius: 8px;
+  object-fit: contain; background: transparent; flex-shrink: 0;
+}
+.brand-name {
+  font-family: 'Fraunces', serif;
+  font-size: 1.15rem; font-weight: 600;
+  color: var(--text); letter-spacing: -0.02em;
+}
+.brand-sub {
+  font-size: 0.68rem; color: var(--muted);
+  margin-top: 2px; text-transform: uppercase;
+  letter-spacing: 0.1em; font-weight: 600;
+}
+.logo-upload-label {
+  display: inline-flex; align-items: center; gap: 7px;
+  background: var(--bg2); border: 1px dashed var(--border2);
+  border-radius: 8px; padding: 10px 14px; cursor: pointer;
+  font-size: 0.8rem; color: var(--muted); transition: all 0.18s;
+}
+.logo-upload-label:hover { border-color: var(--accent); color: var(--accent); }
+.logo-preview {
+  width: 44px; height: 44px; border-radius: 6px;
+  object-fit: contain; border: 1px solid var(--border);
+  display: none; background: var(--surface2);
+}
+.logo-preview.show { display: block; }
+
 /* ── Fade-in ── */
 .card, .results-card, .loading-card {
   animation: fadein 0.3s ease;
@@ -673,6 +709,32 @@ footer strong { color: var(--text); }
         </div>
         <input type="password" class="key-input" id="serpKey" placeholder="Free tier: 100 searches/month" oninput="onSerpInput()">
         <div class="key-note">Adds real SERP rankings · Free tier at <a href="https://serpapi.com" target="_blank" style="color:var(--accent)">serpapi.com</a></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Branding -->
+  <div class="card">
+    <div class="card-label"><i class="fas fa-building"></i> Report Branding <span style="font-size:0.65rem;color:var(--muted);text-transform:none;letter-spacing:0;margin-left:4px">— appears on every report</span></div>
+    <div class="keys-grid">
+      <div class="key-group">
+        <div class="key-lbl"><i class="fas fa-signature"></i> Firm / Company Name</div>
+        <input type="text" class="key-input" id="brandName" placeholder="e.g. Tovah Advisory" oninput="saveBranding()" style="font-family:'Outfit',sans-serif">
+        <div class="key-note">Shown in the report header and PDF</div>
+      </div>
+      <div class="key-group">
+        <div class="key-lbl"><i class="fas fa-image"></i> Logo</div>
+        <div style="display:flex;align-items:center;gap:12px;margin-top:4px">
+          <img id="logoPreview" class="logo-preview" src="" alt="Logo preview">
+          <label class="logo-upload-label">
+            <i class="fas fa-upload"></i> Upload logo
+            <input type="file" id="logoFile" accept="image/*" style="display:none" onchange="handleLogoUpload(event)">
+          </label>
+          <button id="logoRemoveBtn" onclick="removeLogo()" style="display:none;background:none;border:none;color:var(--danger);cursor:pointer;font-size:0.8rem;font-family:'Outfit',sans-serif">
+            <i class="fas fa-times"></i> Remove
+          </button>
+        </div>
+        <div class="key-note">PNG or SVG recommended · Max 2MB</div>
       </div>
     </div>
   </div>
@@ -733,6 +795,15 @@ footer strong { color: var(--text); }
 
   <!-- Results -->
   <div class="card results-card" id="resCard">
+
+    <!-- Brand header — shown when firm name/logo is set -->
+    <div class="brand-header" id="brandHeader">
+      <img id="brandLogoImg" class="brand-logo" src="" alt="" style="display:none">
+      <div>
+        <div class="brand-name" id="brandNameDisplay"></div>
+        <div class="brand-sub">Website Intelligence Report</div>
+      </div>
+    </div>
 
     <div class="res-head">
       <div class="url-pill" id="resUrl">—</div>
@@ -845,7 +916,91 @@ footer strong { color: var(--text); }
 const CACHE   = new Map();
 const TTL     = 60 * 60 * 1000;
 const mods    = { security: true, seo: true, aiSearch: true, local: true };
-const HISTORY = new Map(); // domain -> [{ts, overall, sec, seo, ai, local}]
+const HISTORY = new Map();
+
+// ════════════════════════════════════════
+//  BRANDING — persisted in localStorage
+// ════════════════════════════════════════
+const BRAND_KEY = 'webintel-brand';
+
+function loadBranding() {
+  try {
+    const stored = localStorage.getItem(BRAND_KEY);
+    if (!stored) return;
+    const b = JSON.parse(stored);
+    if (b.name) {
+      document.getElementById('brandName').value = b.name;
+    }
+    if (b.logo) {
+      showLogoPreview(b.logo);
+    }
+    updateBrandHeader();
+  } catch(e) { console.warn('Brand load error:', e); }
+}
+
+function saveBranding() {
+  try {
+    const name = document.getElementById('brandName').value.trim();
+    const logo = document.getElementById('brandLogoImg').src;
+    const hasLogo = document.getElementById('brandLogoImg').style.display !== 'none';
+    localStorage.setItem(BRAND_KEY, JSON.stringify({
+      name,
+      logo: hasLogo ? logo : ''
+    }));
+    updateBrandHeader();
+  } catch(e) { console.warn('Brand save error:', e); }
+}
+
+function handleLogoUpload(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  if (file.size > 2 * 1024 * 1024) { alert('Logo must be under 2MB'); return; }
+  const reader = new FileReader();
+  reader.onload = e => {
+    showLogoPreview(e.target.result);
+    saveBranding();
+  };
+  reader.readAsDataURL(file);
+}
+
+function showLogoPreview(src) {
+  const preview = document.getElementById('logoPreview');
+  const removeBtn = document.getElementById('logoRemoveBtn');
+  const brandImg  = document.getElementById('brandLogoImg');
+  preview.src = src;
+  preview.classList.add('show');
+  removeBtn.style.display = 'inline-flex';
+  brandImg.src = src;
+  brandImg.style.display = 'block';
+}
+
+function removeLogo() {
+  const preview = document.getElementById('logoPreview');
+  const removeBtn = document.getElementById('logoRemoveBtn');
+  const brandImg  = document.getElementById('brandLogoImg');
+  const fileInput = document.getElementById('logoFile');
+  preview.classList.remove('show');
+  preview.src = '';
+  removeBtn.style.display = 'none';
+  brandImg.style.display = 'none';
+  brandImg.src = '';
+  fileInput.value = '';
+  saveBranding();
+}
+
+function updateBrandHeader() {
+  const name   = document.getElementById('brandName').value.trim();
+  const hasLogo = document.getElementById('brandLogoImg').style.display !== 'none';
+  const header  = document.getElementById('brandHeader');
+  const nameEl  = document.getElementById('brandNameDisplay');
+
+  if (name || hasLogo) {
+    nameEl.textContent = name || '';
+    header.classList.add('show');
+  } else {
+    header.classList.remove('show');
+  }
+}
 
 // ════════════════════════════════════════
 //  UI HELPERS
@@ -1183,6 +1338,9 @@ function detailCard(title, icon, rows) {
 // ════════════════════════════════════════
 function display(data, url, fromCache) {
   const { security: sec, seo, aiSearch: ai, local, totalTokens, serpData, meta } = data;
+
+  // Refresh brand header
+  updateBrandHeader();
 
   // Score history delta
   const domain = url.replace(/^https?:\/\/(www\.)?/,'').split('/')[0];
@@ -1586,6 +1744,9 @@ async function run() {
 document.getElementById('urlInput').addEventListener('keydown', e => {
   if (e.key === 'Enter') run();
 });
+
+// Load persisted branding on startup
+loadBranding();
 //  Print CSS shows all tab panes, hides UI
 // ════════════════════════════════════════
 function savePDF() {
