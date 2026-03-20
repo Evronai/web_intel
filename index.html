@@ -833,46 +833,53 @@ function onSerpInput() {
 async function callSerpAPI(domain, serpKey) {
   if (!serpKey) return null;
 
-  // Strip protocol/www from domain for cleaner query
   const cleanDomain = domain.replace(/^https?:\/\/(www\.)?/, '').split('/')[0];
 
   try {
-    // Search for the domain to get ranking signals
-    const params = new URLSearchParams({
-      api_key: serpKey,
-      engine: 'google',
-      q: `site:${cleanDomain}`,
-      num: '10',
-    });
-    const resp = await fetch(`https://serpapi.com/search.json?${params}`, {
-      signal: AbortSignal.timeout(10000)
-    });
+    // SerpAPI blocks direct browser requests (CORS). Route through proxy.
+    const serpUrl = `https://serpapi.com/search.json?api_key=${encodeURIComponent(serpKey)}&engine=google&q=${encodeURIComponent('site:' + cleanDomain)}&num=10`;
+    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(serpUrl)}`;
 
-    if (!resp.ok) {
-      if (resp.status === 401) throw new Error('Invalid SerpAPI key');
-      if (resp.status === 429) throw new Error('SerpAPI quota exceeded');
+    const resp = await fetch(proxyUrl, { signal: AbortSignal.timeout(12000) });
+    if (!resp.ok) return null;
+
+    const wrapper = await resp.json();
+    const text = wrapper.contents;
+    if (!text) return null;
+
+    let data;
+    try { data = JSON.parse(text); } catch { return null; }
+
+    // SerpAPI error responses
+    if (data.error) {
+      if (data.error.includes('Invalid API key') || data.error.includes('authenticate'))
+        throw new Error('Invalid SerpAPI key — check your key at serpapi.com');
+      if (data.error.includes('limit') || data.error.includes('quota'))
+        throw new Error('SerpAPI monthly limit reached (100 searches/month on free tier)');
+      console.warn('SerpAPI error:', data.error);
       return null;
     }
 
-    const data = await resp.json();
-
     const result = {
-      indexedPages:     data.search_information?.total_results || 0,
-      hasFeaturedSnip:  !!data.answer_box,
-      hasKnowledgePanel:!!data.knowledge_graph,
-      sitelinks:        data.organic_results?.[0]?.sitelinks?.length || 0,
-      topResult:        data.organic_results?.[0]?.title || null,
-      topResultUrl:     data.organic_results?.[0]?.link  || null,
-      searchAppearance: [],
+      indexedPages:      data.search_information?.total_results || 0,
+      hasFeaturedSnip:   !!data.answer_box,
+      hasKnowledgePanel: !!data.knowledge_graph,
+      sitelinks:         data.organic_results?.[0]?.sitelinks?.length || 0,
+      topResult:         data.organic_results?.[0]?.title || null,
+      topResultUrl:      data.organic_results?.[0]?.link  || null,
+      searchAppearance:  [],
     };
 
     if (result.hasFeaturedSnip)   result.searchAppearance.push('Featured snippet');
     if (result.hasKnowledgePanel) result.searchAppearance.push('Knowledge panel');
     if (result.sitelinks > 0)     result.searchAppearance.push(`Sitelinks (${result.sitelinks})`);
+    if (!result.searchAppearance.length) result.searchAppearance.push('Standard listing');
 
     return result;
   } catch(e) {
-    console.warn('SerpAPI error:', e.message);
+    // Surface key errors to the user, swallow other failures gracefully
+    if (e.message.includes('SerpAPI') || e.message.includes('serpapi')) throw e;
+    console.warn('SerpAPI fetch failed:', e.message);
     return null;
   }
 }
@@ -1153,15 +1160,17 @@ async function run() {
     const serpPromise = serpKey ? callSerpAPI(url, serpKey) : Promise.resolve(null);
 
     // Run all in parallel — AI modules + SerpAPI simultaneously
-    const [settled, serpData] = await Promise.all([
+    let serpData = null;
+    const [settled, serpResult] = await Promise.all([
       Promise.allSettled(
         Object.entries(tasks).map(async ([key, p]) => {
           const r = await p;
           return { key, parsed: parseJSON(r.text), tokens: r.tokens };
         })
       ),
-      serpPromise,
+      serpPromise.catch(e => { showErr('SerpAPI: ' + e.message); return null; }),
     ]);
+    serpData = serpResult;
 
     // Stage 4 — Build report
     setProgress(90, 'Building report…', '');
