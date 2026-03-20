@@ -1340,10 +1340,12 @@ function display(data, url, fromCache) {
 //  MAIN RUN
 // ════════════════════════════════════════
 async function run() {
-  const url    = document.getElementById('urlInput').value.trim();
-  const dsKey  = document.getElementById('deepseekKey').value.trim();
+  const url     = document.getElementById('urlInput').value.trim();
+  const dsKey   = document.getElementById('deepseekKey').value.trim();
   const serpKey = document.getElementById('serpKey').value.trim();
-  const btn    = document.getElementById('runBtn');
+  const btn     = document.getElementById('runBtn');
+  const loadCard = document.getElementById('loadCard');
+  const resCard  = document.getElementById('resCard');
 
   hideErr();
 
@@ -1355,21 +1357,23 @@ async function run() {
   const cached = getCache(url);
   if (cached) { display(cached, url, true); return; }
 
+  // Show loading immediately — before any async work
   btn.disabled = true;
-  document.getElementById('resCard').style.display   = 'none';
-  document.getElementById('loadCard').style.display  = 'block';
+  resCard.style.display  = 'none';
+  loadCard.style.display = 'block';
+  setProgress(0, 'Starting…', '');
+  setStages([
+    { l: 'Fetch website',   s: 'active' },
+    { l: 'Extract content', s: '' },
+    { l: 'AI analysis',     s: '' },
+    { l: 'Build report',    s: '' },
+  ]);
 
   const enabled = Object.keys(mods).filter(k => mods[k]);
 
   try {
     // Stage 1 — Fetch
     setProgress(5, 'Fetching website…', 'Connecting to target');
-    setStages([
-      { l: 'Fetch website',   s: 'active' },
-      { l: 'Extract content', s: '' },
-      { l: 'AI analysis',     s: '' },
-      { l: 'Build report',    s: '' },
-    ]);
 
     const html = await fetchSite(url);
 
@@ -1520,12 +1524,12 @@ async function run() {
     setProgress(100, 'Analysis complete!', '');
 
     setTimeout(() => {
-      document.getElementById('loadCard').style.display = 'none';
+      loadCard.style.display = 'none';
       display(analysisData, url, false);
     }, 350);
 
   } catch (e) {
-    document.getElementById('loadCard').style.display = 'none';
+    loadCard.style.display = 'none';
     showErr(e.message || 'Analysis failed. Please try again.');
   } finally {
     btn.disabled = false;
