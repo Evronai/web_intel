@@ -1699,11 +1699,14 @@ function display(data, url, fromCache) {
     document.getElementById('local-details').innerHTML = detailCard('Local Signals (AI-estimated)', 'map-marker-alt', [
       ['Score',             local.score + '/100'],
       ['NAP Consistency',   local.napConsistency || '—'],
+      ['Address Found',     (local.hasAddress || data.meta?.merged?.hasAddress) ? 'Yes' : 'Not detected', (local.hasAddress || data.meta?.merged?.hasAddress) ? 'ok' : 'warn'],
+      ['Phone Found',       (local.hasPhone || data.meta?.merged?.hasPhone) ? 'Yes' : 'Not detected', (local.hasPhone || data.meta?.merged?.hasPhone) ? 'ok' : 'warn'],
       ['Local Keywords',    local.localKeywords ?? '—'],
       ['GBP Signals',       local.hasGBP ? 'Detected' : 'Not found', local.hasGBP ? 'ok' : 'warn'],
       ['Citation Signals',  local.citations ?? '—'],
       ['LocalBusiness Schema', local.hasLocalSchema ? 'Present' : 'Missing', local.hasLocalSchema ? 'ok' : 'warn'],
       ['Region',            region || 'Not specified'],
+      ['Pages Crawled',     data.meta?.crawledPages ?? '1'],
     ]);
   }
 
@@ -1825,8 +1828,8 @@ async function run() {
 
     const html = await fetchSite(url);
 
-    // Stage 2 — Extract clean content (no raw HTML to AI)
-    setProgress(20, 'Extracting content…', 'Stripping markup, reading signals');
+    // Stage 2 — Extract content + crawl sub-pages for accuracy
+    setProgress(15, 'Fetching additional pages…', 'Contact, About — checking NAP signals');
     setStages([
       { l: 'Fetch website',   s: 'done' },
       { l: 'Extract content', s: 'active' },
@@ -1834,14 +1837,64 @@ async function run() {
       { l: 'Build report',    s: '' },
     ]);
 
-    const { m, body } = extractContent(html);
+    // Derive base URL for sub-page fetching
+    const baseUrl = url.replace(/\/$/, '').replace(/\/[^/]*$/, '') || url.replace(/\/$/, '');
+    const origin  = new URL(url).origin;
 
-    // Build structured context — AI reads clean data, not markup
+    // Common pages that contain NAP, contact info, local signals
+    const subPageSlugs = ['/contact', '/contact-us', '/about', '/about-us', '/store', '/locations'];
+    // Also check links in homepage HTML for actual contact/about hrefs
+    const linkedPages = [...html.matchAll(/href=["']([^"']*(?:contact|about|store|location)[^"']*)/gi)]
+      .map(m => {
+        try {
+          const u = new URL(m[1], url);
+          return u.origin === origin ? u.href : null;
+        } catch { return null; }
+      })
+      .filter(Boolean)
+      .slice(0, 3);
+
+    const pagesToCheck = [...new Set([
+      ...subPageSlugs.map(s => origin + s),
+      ...linkedPages,
+    ])].slice(0, 5); // max 5 sub-pages to keep it fast
+
+    // Fetch sub-pages in parallel — silently skip failures
+    const subPageResults = await Promise.allSettled(
+      pagesToCheck.map(async (pageUrl) => {
+        try {
+          const pageHtml = await fetchSite(pageUrl);
+          return extractContent(pageHtml);
+        } catch { return null; }
+      })
+    );
+
+    // Merge NAP signals across all pages
+    const allPages = [{ m, body }, ...subPageResults
+      .filter(r => r.status === 'fulfilled' && r.value)
+      .map(r => r.value)
+    ];
+
+    // A signal is TRUE if found on ANY crawled page
+    const merged = {
+      hasAddress:  allPages.some(p => p.m.hasAddress),
+      hasPhone:    allPages.some(p => p.m.hasPhone),
+      hasLocalBiz: allPages.some(p => p.m.hasLocalBiz),
+      hasFAQ:      allPages.some(p => p.m.hasFAQ),
+      hasSchema:   allPages.some(p => p.m.hasSchema),
+      pagesWithContact: allPages.filter(p => p.m.hasAddress || p.m.hasPhone).length,
+      crawledPages: allPages.length,
+    };
+
+    setProgress(20, 'Extracting content…', `Analysed ${merged.crawledPages} pages`);
+
+    // Build structured context — uses merged signals from all crawled pages
     const ctx = [
       `URL: ${url}`,
       `HTTPS: ${url.startsWith('https') ? 'yes' : 'no'}`,
       `Industry: ${industry || 'not specified'}`,
       `Region/Market: ${region || 'not specified'}`,
+      `Pages crawled: ${merged.crawledPages} (homepage + sub-pages)`,
       `Title: ${m.title || 'none'} (${m.title.length} chars)`,
       `Meta description: ${m.description || 'none'} (${m.description.length} chars)`,
       `Canonical: ${m.canonical || 'none'}`,
@@ -1850,16 +1903,18 @@ async function run() {
       `H1: ${m.h1} | H2: ${m.h2} | H3: ${m.h3}`,
       `Images: ${m.imgs} total, ${m.imgsAlt} with alt text`,
       `Links: ${m.links}`,
-      `Schema markup: ${m.hasSchema ? 'yes' : 'no'}`,
-      `LocalBusiness schema: ${m.hasLocalBiz ? 'yes' : 'no'}`,
-      `FAQ content: ${m.hasFAQ ? 'yes' : 'no'}`,
+      `Schema markup (any page): ${merged.hasSchema ? 'yes' : 'no'}`,
+      `LocalBusiness schema (any page): ${merged.hasLocalBiz ? 'yes' : 'no'}`,
+      `Address found (any page): ${merged.hasAddress ? 'yes — present on contact/about page' : 'no — not found on any crawled page'}`,
+      `Phone found (any page): ${merged.hasPhone ? 'yes — present on contact/about page' : 'no — not found on any crawled page'}`,
+      `FAQ content (any page): ${merged.hasFAQ ? 'yes' : 'no'}`,
+      `Pages with contact info: ${merged.pagesWithContact} of ${merged.crawledPages}`,
       `Viewport meta: ${m.hasViewport ? 'yes' : 'no'}`,
       `CSP meta tag: ${m.hasCSP ? 'yes' : 'no'}`,
-      `Address/phone signals: ${m.hasAddress ? 'yes' : 'no'} / ${m.hasPhone ? 'yes' : 'no'}`,
       `Detected libraries: ${m.libs.join(', ') || 'none'}`,
       `JS rendered: ${m.isJSRendered ? 'yes' : 'no'}`,
-      `Visible word count: ${m.bodyWordCount}`,
-      `Page text (excerpt): ${body}`,
+      `Visible word count (homepage): ${m.bodyWordCount}`,
+      `Page text excerpt (homepage): ${body}`,
     ].join('\n');
 
     // Stage 3 — Parallel AI calls
@@ -1878,20 +1933,22 @@ async function run() {
 
     const siteDomain = url.replace(/^https?:\/\/(www\.)?/,'').split('/')[0];
 
+    const ACCURACY_RULE = `ACCURACY RULE: Only recommend fixing things that are genuinely absent or broken based on the data provided. Do NOT recommend adding something already confirmed present in the data. The data covers ${merged.crawledPages} crawled pages.`;
+
     if (mods.security) tasks.security = callDS(SYS,
-      `Analyse this website for security issues.\n${ctx}\n\n${RUBRIC}\n\nReturn ONLY:\n{"score":<0-100>,"criticalIssues":<n>,"hasCSP":<bool>,"outdatedLibs":[<strings>],"industryBenchmark":"<how this score compares to typical ${industry||'similar'} sites>","summary":"<3-4 sentences: what works, what is critical, specific site context — not generic>","recommendations":[{"issue":"<specific issue>","fix":"<actionable fix>","businessImpact":"<plain English: what this costs the business>"},...]}`,
+      `Analyse this website for security issues.\n${ctx}\n\n${RUBRIC}\n${ACCURACY_RULE}\n\nReturn ONLY:\n{"score":<0-100>,"criticalIssues":<n>,"hasCSP":<bool>,"outdatedLibs":[<strings>],"industryBenchmark":"<how this score compares to typical ${industry||'similar'} sites>","summary":"<3-4 sentences: what works, what is critical, specific site context — not generic>","recommendations":[{"issue":"<specific issue>","fix":"<actionable fix>","businessImpact":"<plain English: what this costs the business>"},...]}`,
       dsKey, 900);
 
     if (mods.seo) tasks.seo = callDS(SYS,
-      `Analyse this website for technical SEO.\n${ctx}\n\n${RUBRIC}\n\nReturn ONLY:\n{"score":<0-100>,"issues":<n>,"titleLength":<n>,"metaLength":<n>,"h1Count":<n>,"h2Count":<n>,"totalImages":<n>,"imagesWithAlt":<n>,"hasSchema":<bool>,"hasCanonical":<bool>,"industryBenchmark":"<how this score compares to typical ${industry||'similar'} sites>","summary":"<3-4 sentences: what works, biggest gaps, specific findings — reference actual title/meta content>","recommendations":[{"issue":"<specific issue>","fix":"<actionable fix>","businessImpact":"<plain English: what this costs the business>"},...]}`,
+      `Analyse this website for technical SEO.\n${ctx}\n\n${RUBRIC}\n${ACCURACY_RULE}\n\nReturn ONLY:\n{"score":<0-100>,"issues":<n>,"titleLength":<n>,"metaLength":<n>,"h1Count":<n>,"h2Count":<n>,"totalImages":<n>,"imagesWithAlt":<n>,"hasSchema":<bool>,"hasCanonical":<bool>,"industryBenchmark":"<how this score compares to typical ${industry||'similar'} sites>","summary":"<3-4 sentences: what works, biggest gaps, specific findings — reference actual title/meta content>","recommendations":[{"issue":"<specific issue>","fix":"<actionable fix>","businessImpact":"<plain English: what this costs the business>"},...]}`,
       dsKey, 900);
 
     if (mods.aiSearch) tasks.aiSearch = callDS(SYS,
-      `Analyse this website for AI search engine optimisation (ChatGPT, Perplexity, Google AI Overviews).\n${ctx}\n\n${RUBRIC}\n\nReturn ONLY:\n{"score":<0-100>,"optimizationGap":<0-100>,"conversationalScore":<0-100>,"questionScore":<0-100>,"snippetPotential":<0-100>,"hasFAQ":<bool>,"industryBenchmark":"<how this score compares to typical ${industry||'similar'} sites>","summary":"<3-4 sentences: specific AI search readiness assessment, what content types are missing, opportunity size>","recommendations":[{"issue":"<specific issue>","fix":"<actionable fix>","businessImpact":"<plain English: what this costs the business>"},...]}`,
+      `Analyse this website for AI search engine optimisation (ChatGPT, Perplexity, Google AI Overviews).\n${ctx}\n\n${RUBRIC}\n${ACCURACY_RULE}\n\nReturn ONLY:\n{"score":<0-100>,"optimizationGap":<0-100>,"conversationalScore":<0-100>,"questionScore":<0-100>,"snippetPotential":<0-100>,"hasFAQ":<bool>,"industryBenchmark":"<how this score compares to typical ${industry||'similar'} sites>","summary":"<3-4 sentences: specific AI search readiness assessment, what content types are missing, opportunity size>","recommendations":[{"issue":"<specific issue>","fix":"<actionable fix>","businessImpact":"<plain English: what this costs the business>"},...]}`,
       dsKey, 900);
 
     if (mods.local) tasks.local = callDS(SYS,
-      `Analyse this website for local SEO signals. Region: ${region || 'not specified'}. Base assessment ONLY on signals visible in the provided data.\n${ctx}\n\n${RUBRIC}\n\nReturn ONLY:\n{"score":<0-100>,"napConsistency":"<Consistent|Inconsistent|Not detected>","localKeywords":<n>,"hasGBP":<bool>,"citations":<estimated n>,"hasLocalSchema":<bool>,"industryBenchmark":"<how this score compares to typical ${industry||'similar'} sites in ${region||'this region'}>","summary":"<3-4 sentences: honest local SEO assessment, specific regional context if region provided, what is and is not detectable>","recommendations":[{"issue":"<specific issue>","fix":"<actionable fix>","businessImpact":"<plain English: what this costs the business>"},...]}`,
+      `Analyse this website for local SEO signals. Region: ${region || 'not specified'}. Base assessment ONLY on signals from the data below — which covers ${merged.crawledPages} crawled pages including contact/about pages.\n${ctx}\n\n${RUBRIC}\n\nCRITICAL ACCURACY RULE: The data above already tells you whether address, phone, and contact info was found across ALL crawled pages. Do NOT recommend adding something that is already confirmed present in the data. Only flag things genuinely absent from all crawled pages.\n\nReturn ONLY:\n{"score":<0-100>,"napConsistency":"<Consistent|Inconsistent|Not detected>","localKeywords":<n>,"hasGBP":<bool>,"citations":<estimated n>,"hasLocalSchema":<bool>,"hasAddress":${merged.hasAddress},"hasPhone":${merged.hasPhone},"industryBenchmark":"<how this score compares to typical ${industry||'similar'} sites in ${region||'this region'}>","summary":"<3-4 sentences: honest local SEO assessment based on confirmed findings across all crawled pages>","recommendations":[{"issue":"<specific issue not already present>","fix":"<actionable fix>","businessImpact":"<plain English impact>"},...]}`,
       dsKey, 900);
 
     // Executive summary — separate AI call for a proper narrative
@@ -1940,7 +1997,7 @@ async function run() {
       { l: 'Build report',    s: 'active' },
     ]);
 
-    const analysisData = { totalTokens: 0, serpData, meta: m, tokenBreakdown: {}, competitors: compResults.filter(Boolean), industry, region };
+    const analysisData = { totalTokens: 0, serpData, meta: { ...m, merged, crawledPages: merged.crawledPages }, tokenBreakdown: {}, competitors: compResults.filter(Boolean), industry, region };
     let parseFailures = 0;
     settled.forEach(s => {
       if (s.status === 'fulfilled' && s.value?.parsed) {
