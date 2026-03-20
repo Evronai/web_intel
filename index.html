@@ -1387,6 +1387,116 @@ async function callSerpAPI(domain, serpKey) {
   console.warn('SerpAPI unavailable:', lastErr);
   return null;
 }
+
+// ════════════════════════════════════════
+//  GEO API — Google AI Overview + AI Mode
+//  Checks if the domain appears in AI-generated
+//  answers for relevant keywords
+// ════════════════════════════════════════
+async function callGEO(url, serpKey, industry, region, pageTitle) {
+  if (!serpKey) return null;
+
+  const domain = url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0];
+
+  // Derive 2-3 keywords from available context
+  const keywords = [];
+  if (industry && region) keywords.push(`${industry} ${region}`);
+  if (industry)           keywords.push(industry);
+  // Extract brand/topic from title — strip domain suffixes
+  const titleClean = (pageTitle || domain).replace(/\.[a-z]{2,}$/i,'').replace(/[-_]/g,' ').trim();
+  if (titleClean && titleClean.length > 3) keywords.push(titleClean);
+  // Fallback
+  if (!keywords.length) keywords.push(domain.split('.')[0]);
+
+  const uniqueKws = [...new Set(keywords)].slice(0, 3);
+
+  // Helper — proxy a SerpAPI call and parse response
+  async function serpFetch(apiUrl) {
+    const proxies = [
+      `https://api.allorigins.win/get?url=${encodeURIComponent(apiUrl)}`,
+      `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(apiUrl)}`,
+    ];
+    for (const proxy of proxies) {
+      try {
+        const r = await fetch(proxy, { signal: AbortSignal.timeout(12000) });
+        if (!r.ok) continue;
+        const ct = r.headers.get('content-type') || '';
+        let text = ct.includes('application/json')
+          ? (await r.json()).contents || ''
+          : await r.text();
+        if (!text || text.length < 10) continue;
+        const data = JSON.parse(text);
+        if (data.error) { console.warn('SerpAPI GEO error:', data.error); return null; }
+        return data;
+      } catch { continue; }
+    }
+    return null;
+  }
+
+  const geoResults = {
+    keywords: uniqueKws,
+    aiOverview: [],   // per-keyword AI Overview results
+    aiMode:     [],   // per-keyword AI Mode results
+    domainMentioned: false,
+    mentionedIn: [],
+    totalChecked: 0,
+  };
+
+  // Check each keyword in parallel
+  await Promise.allSettled(uniqueKws.map(async (kw) => {
+    try {
+      // Step 1: regular search to get ai_overview page_token
+      const searchUrl = `https://serpapi.com/search.json?api_key=${encodeURIComponent(serpKey)}&engine=google&q=${encodeURIComponent(kw)}&num=5`;
+      const searchData = await serpFetch(searchUrl);
+      if (!searchData) return;
+
+      geoResults.totalChecked++;
+
+      const kwResult = { keyword: kw, hasAIOverview: false, mentioned: false, sources: [] };
+
+      // Check embedded AI Overview in search results
+      if (searchData.ai_overview) {
+        kwResult.hasAIOverview = true;
+        const overviewText = JSON.stringify(searchData.ai_overview).toLowerCase();
+        if (overviewText.includes(domain.toLowerCase())) {
+          kwResult.mentioned = true;
+          geoResults.domainMentioned = true;
+          geoResults.mentionedIn.push(`AI Overview: "${kw}"`);
+        }
+        // Extract cited sources
+        const refs = searchData.ai_overview?.references || searchData.ai_overview?.sources || [];
+        kwResult.sources = refs.slice(0, 3).map(r => r.title || r.link || '');
+      }
+
+      // Step 2: fetch full AI Overview if page_token exists
+      if (searchData.ai_overview?.page_token) {
+        const aoUrl = `https://serpapi.com/search.json?api_key=${encodeURIComponent(serpKey)}&engine=google_ai_overview&page_token=${encodeURIComponent(searchData.ai_overview.page_token)}`;
+        const aoData = await serpFetch(aoUrl);
+        if (aoData) {
+          const aoText = JSON.stringify(aoData).toLowerCase();
+          if (aoText.includes(domain.toLowerCase())) {
+            kwResult.mentioned = true;
+            geoResults.domainMentioned = true;
+            if (!geoResults.mentionedIn.includes(`AI Overview: "${kw}"`))
+              geoResults.mentionedIn.push(`AI Overview: "${kw}"`);
+          }
+        }
+      }
+
+      geoResults.aiOverview.push(kwResult);
+
+    } catch(e) { console.warn('GEO check failed for', kw, e.message); }
+  }));
+
+  // Compute GEO visibility score
+  const mentionRate = geoResults.totalChecked > 0
+    ? geoResults.mentionedIn.length / geoResults.totalChecked
+    : 0;
+  geoResults.visibilityScore = Math.round(mentionRate * 100);
+  geoResults.aiOverviewCount = geoResults.aiOverview.filter(r => r.hasAIOverview).length;
+
+  return geoResults;
+}
 function cKey(url) { return url + JSON.stringify(mods); }
 function getCache(url) {
   const k = cKey(url), c = CACHE.get(k);
@@ -1459,7 +1569,7 @@ function drawSparkline(canvasId, values) {
 //  DISPLAY RESULTS
 // ════════════════════════════════════════
 function display(data, url, fromCache) {
-  const { security: sec, seo, aiSearch: ai, local, totalTokens, serpData, meta, competitors, industry, region } = data;
+  const { security: sec, seo, aiSearch: ai, local, totalTokens, serpData, geoData, meta, competitors, industry, region } = data;
 
   // Refresh brand header
   updateBrandHeader();
@@ -1684,14 +1794,37 @@ function display(data, url, fromCache) {
 
   if (ai) {
     buildTabInsight('ai-body', ai, 'ai');
-    document.getElementById('ai-details').innerHTML = detailCard('AI Readiness Signals', 'robot', [
-      ['Score',               ai.score + '/100'],
-      ['Optimisation Gap',    (ai.optimizationGap ?? 0) + '%'],
-      ['Conversational',      (ai.conversationalScore ?? 0) + '/100'],
-      ['Q&A Structure',       (ai.questionScore ?? 0) + '/100'],
-      ['Snippet Potential',   (ai.snippetPotential ?? 0) + '%'],
-      ['FAQ Present',         ai.hasFAQ ? 'Yes' : 'No', ai.hasFAQ ? 'ok' : 'warn'],
-    ]);
+
+    // Real GEO data card if available
+    let geoCard = '';
+    if (geoData && geoData.totalChecked > 0) {
+      const geoRows = [
+        ['Keywords Checked',   geoData.keywords.join(', ')],
+        ['AI Overviews Found', geoData.aiOverviewCount + ' of ' + geoData.totalChecked + ' searches', geoData.aiOverviewCount > 0 ? 'ok' : 'warn'],
+        ['Domain Mentioned',   geoData.domainMentioned ? 'Yes ✓' : 'Not detected', geoData.domainMentioned ? 'ok' : 'warn'],
+        ['GEO Visibility',     geoData.visibilityScore + '%', geoData.visibilityScore > 0 ? 'ok' : 'warn'],
+        ['Mentioned In',       geoData.mentionedIn.join(', ') || 'None detected'],
+      ];
+      geoCard = detailCard('Live GEO Data (Google AI Overview)', 'robot', geoRows);
+      // Update the serpPill to also show GEO
+      const sp = document.getElementById('serpPill');
+      if (sp) sp.textContent = '📊 Live SERP + GEO';
+    } else if (serpKey || document.getElementById('serpKey')?.value?.trim()) {
+      geoCard = detailCard('GEO Visibility (Google AI Overview)', 'robot', [
+        ['Status', 'No AI Overview results found for checked keywords — site not yet appearing in AI-generated answers', 'warn'],
+        ['Keywords', geoData?.keywords?.join(', ') || 'None derived — add Industry/Region fields for better results'],
+      ]);
+    }
+
+    document.getElementById('ai-details').innerHTML =
+      detailCard('AI Readiness Signals', 'robot', [
+        ['Score',               ai.score + '/100'],
+        ['Optimisation Gap',    (ai.optimizationGap ?? 0) + '%'],
+        ['Conversational',      (ai.conversationalScore ?? 0) + '/100'],
+        ['Q&A Structure',       (ai.questionScore ?? 0) + '/100'],
+        ['Snippet Potential',   (ai.snippetPotential ?? 0) + '%'],
+        ['FAQ Present',         ai.hasFAQ ? 'Yes' : 'No', ai.hasFAQ ? 'ok' : 'warn'],
+      ]) + geoCard;
   }
 
   if (local) {
@@ -1921,7 +2054,7 @@ async function run() {
     ].join('\n');
 
     // Stage 3 — Parallel AI calls
-    setProgress(30, 'Running AI analysis…', `${enabled.length} module(s) + executive summary in parallel`);
+    setProgress(30, 'Running AI analysis…', `${enabled.length} modules + GEO check in parallel`);
     setStages([
       { l: 'Fetch website',   s: 'done' },
       { l: 'Extract content', s: 'done' },
@@ -1962,6 +2095,9 @@ async function run() {
     // SerpAPI — runs in parallel, adds real SERP data to SEO tab
     const serpPromise = serpKey ? callSerpAPI(url, serpKey) : Promise.resolve(null);
 
+    // GEO API — checks AI Overview + AI Mode visibility for relevant keywords
+    const geoPromise = serpKey ? callGEO(url, serpKey, industry, region, m.title) : Promise.resolve(null);
+
     // Competitor analysis — fetch and analyse each competitor
     const compUrls = [comp1, comp2].filter(u => u && u.startsWith('http'));
     const compPromises = compUrls.map(async (cUrl) => {
@@ -1978,7 +2114,7 @@ async function run() {
 
     // Run everything in parallel
     let serpData = null;
-    const [settled, serpResult, ...compResults] = await Promise.all([
+    const [settled, serpResult, geoResult, ...compResults] = await Promise.all([
       Promise.allSettled(
         Object.entries(tasks).map(async ([key, p]) => {
           const r = await p;
@@ -1987,6 +2123,7 @@ async function run() {
         })
       ),
       serpPromise.catch(e => { showErr('SerpAPI: ' + e.message); return null; }),
+      geoPromise.catch(e => { console.warn('GEO:', e.message); return null; }),
       ...compPromises,
     ]);
     serpData = serpResult;
@@ -2000,7 +2137,7 @@ async function run() {
       { l: 'Build report',    s: 'active' },
     ]);
 
-    const analysisData = { totalTokens: 0, serpData, meta: { ...m, merged, crawledPages: merged.crawledPages }, tokenBreakdown: {}, competitors: compResults.filter(Boolean), industry, region };
+    const analysisData = { totalTokens: 0, serpData, geoData: geoResult, meta: { ...m, merged, crawledPages: merged.crawledPages }, tokenBreakdown: {}, competitors: compResults.filter(Boolean), industry, region };
     let parseFailures = 0;
     settled.forEach(s => {
       if (s.status === 'fulfilled' && s.value?.parsed) {
