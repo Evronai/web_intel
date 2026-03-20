@@ -1165,8 +1165,35 @@ function extractContent(html) {
   m.hasCSP      = /<meta[^>]+http-equiv=["']Content-Security-Policy["']/i.test(html);
   m.https       = /^https:/i.test(m.canonical || 'x');
   m.hasLocalBiz = /LocalBusiness|localBusiness/i.test(html);
-  m.hasAddress  = /<[^>]+(address|street|postcode|zip.?code)/i.test(html) || /\b\d{4,5}\s+[A-Z]/i.test(html);
-  m.hasPhone    = /\+?[\d\s\-\(\)]{10,15}/.test(html);
+  // Address detection — covers US, UK, Caribbean, and generic patterns
+  m.hasAddress = (
+    // HTML address tag
+    /<address[\s>]/i.test(html) ||
+    // Schema address properties
+    /addressLocality|streetAddress|addressRegion/i.test(html) ||
+    // Caribbean / Trinidad locations
+    /port\s+of\s+spain|san\s+fernando|chaguanas|arima|punto\s+a\s+pierre|tobago|trinidad/i.test(html) ||
+    // Generic street/address keywords near numbers
+    /\d+\s+[\w\s]{3,30}(street|st\.?|avenue|ave\.?|road|rd\.?|drive|dr\.?|lane|ln\.?|boulevard|blvd)/i.test(html) ||
+    // UK/Caribbean postcode patterns
+    /[A-Z]{1,2}\d{1,2}\s*\d[A-Z]{2}/i.test(html) ||
+    // US zip code
+    /\b\d{5}(-\d{4})?\b/.test(html) ||
+    // Address label patterns in contact pages
+    /(?:our\s+)?(?:address|location|find\s+us|visit\s+us)\s*[:]/i.test(html)
+  );
+
+  // Phone detection — more specific, avoids matching SKUs/IDs
+  m.hasPhone = (
+    // International format with country code
+    /\+\d{1,3}[\s\-\.]?\(?\d{3}\)?[\s\-\.]?\d{3}[\s\-\.]?\d{4}/.test(html) ||
+    // Trinidad local: (868) XXX-XXXX or 868-XXX-XXXX
+    /\(?\b868\b\)?[\s\-\.]?\d{3}[\s\-\.]?\d{4}/.test(html) ||
+    // Generic phone label followed by number
+    /(?:phone|tel|call\s+us|telephone|mobile|whatsapp)\s*:?\s*[\+\d\s\-\(\)]{7,15}/i.test(html) ||
+    // Clickable tel: links
+    /href=["']tel:/i.test(html)
+  );
 
   // Detected libraries
   const libs = [];
@@ -2006,20 +2033,31 @@ async function run() {
     );
 
     // Merge NAP signals across all pages
-    const allPages = [{ m, body }, ...subPageResults
+    const allPages = [{ m, body, pageUrl: url }, ...subPageResults
       .filter(r => r.status === 'fulfilled' && r.value)
-      .map(r => r.value)
+      .map((r, i) => ({ ...r.value, pageUrl: pagesToCheck[i] }))
     ];
+
+    // Track which specific pages were crawled and what they contained
+    const contactPagesCrawled = allPages
+      .filter(p => /contact|about|store|location/i.test(p.pageUrl || ''))
+      .map(p => ({
+        url: p.pageUrl,
+        hasAddress: p.m.hasAddress,
+        hasPhone:   p.m.hasPhone,
+      }));
 
     // A signal is TRUE if found on ANY crawled page
     const merged = {
-      hasAddress:  allPages.some(p => p.m.hasAddress),
-      hasPhone:    allPages.some(p => p.m.hasPhone),
-      hasLocalBiz: allPages.some(p => p.m.hasLocalBiz),
-      hasFAQ:      allPages.some(p => p.m.hasFAQ),
-      hasSchema:   allPages.some(p => p.m.hasSchema),
-      pagesWithContact: allPages.filter(p => p.m.hasAddress || p.m.hasPhone).length,
-      crawledPages: allPages.length,
+      hasAddress:          allPages.some(p => p.m.hasAddress),
+      hasPhone:            allPages.some(p => p.m.hasPhone),
+      hasLocalBiz:         allPages.some(p => p.m.hasLocalBiz),
+      hasFAQ:              allPages.some(p => p.m.hasFAQ),
+      hasSchema:           allPages.some(p => p.m.hasSchema),
+      hasContactPage:      contactPagesCrawled.length > 0,
+      contactPagesDetail:  contactPagesCrawled,
+      pagesWithContact:    allPages.filter(p => p.m.hasAddress || p.m.hasPhone).length,
+      crawledPages:        allPages.length,
     };
 
     setProgress(20, 'Extracting content…', `Analysed ${merged.crawledPages} pages`);
@@ -2041,8 +2079,9 @@ async function run() {
       `Links: ${m.links}`,
       `Schema markup (any page): ${merged.hasSchema ? 'yes' : 'no'}`,
       `LocalBusiness schema (any page): ${merged.hasLocalBiz ? 'yes' : 'no'}`,
-      `Address found (any page): ${merged.hasAddress ? 'yes — present on contact/about page' : 'no — not found on any crawled page'}`,
-      `Phone found (any page): ${merged.hasPhone ? 'yes — present on contact/about page' : 'no — not found on any crawled page'}`,
+      `Address found (any page): ${merged.hasAddress ? 'YES — address text detected on at least one page' : 'NO — no address text found on any crawled page (including contact page if present)'}`,
+      `Phone found (any page): ${merged.hasPhone ? 'YES — phone number detected on at least one page' : 'NO — no phone number found on any crawled page'}`,
+      `Contact page exists: ${merged.hasContactPage ? 'YES — crawled, but contained: address=' + (merged.contactPagesDetail.some(p=>p.hasAddress)?'found':'NOT FOUND') + ', phone=' + (merged.contactPagesDetail.some(p=>p.hasPhone)?'found':'NOT FOUND') : 'not detected in crawl'}`,
       `FAQ content (any page): ${merged.hasFAQ ? 'yes' : 'no'}`,
       `Pages with contact info: ${merged.pagesWithContact} of ${merged.crawledPages}`,
       `Viewport meta: ${m.hasViewport ? 'yes' : 'no'}`,
@@ -2084,7 +2123,7 @@ async function run() {
       dsKey, 900);
 
     if (mods.local) tasks.local = callDS(SYS,
-      `Analyse this website for local SEO signals. Region: ${region || 'not specified'}. Base assessment ONLY on signals from the data below — which covers ${merged.crawledPages} crawled pages including contact/about pages.\n${ctx}\n\n${RUBRIC}\n\nCRITICAL ACCURACY RULE: The data above already tells you whether address, phone, and contact info was found across ALL crawled pages. Do NOT recommend adding something that is already confirmed present in the data. Only flag things genuinely absent from all crawled pages.\n\nReturn ONLY:\n{"score":<0-100>,"napConsistency":"<Consistent|Inconsistent|Not detected>","localKeywords":<n>,"hasGBP":<bool>,"citations":<estimated n>,"hasLocalSchema":<bool>,"hasAddress":${merged.hasAddress},"hasPhone":${merged.hasPhone},"industryBenchmark":"<how this score compares to typical ${industry||'similar'} sites in ${region||'this region'}>","summary":"<3-4 sentences: honest local SEO assessment based on confirmed findings across all crawled pages>","recommendations":[{"issue":"<specific issue not already present>","fix":"<actionable fix>","businessImpact":"<plain English impact>"},...]}`,
+      `Analyse this website for local SEO signals. Region: ${region || 'not specified'}. Base assessment ONLY on signals from the data below — which covers ${merged.crawledPages} crawled pages including contact/about pages.\n${ctx}\n\n${RUBRIC}\n\nCRITICAL ACCURACY RULES:\n1. The data explicitly states whether address and phone were found. Trust these values absolutely — do NOT contradict them.\n2. If "Contact page exists: YES" but address=NOT FOUND, the contact page EXISTS but has NO address. Do NOT recommend "add a contact page" — recommend "add address details TO the existing contact page".\n3. If address=NOT FOUND, you MAY recommend adding an address. If address=found, NEVER recommend adding one.\n4. Only flag things genuinely absent from all crawled pages.\n\nReturn ONLY:\n{"score":<0-100>,"napConsistency":"<Consistent|Inconsistent|Not detected>","localKeywords":<n>,"hasGBP":<bool>,"citations":<estimated n>,"hasLocalSchema":<bool>,"hasAddress":${merged.hasAddress},"hasPhone":${merged.hasPhone},"hasContactPage":${merged.hasContactPage},"industryBenchmark":"<benchmark>","summary":"<3-4 sentences — reference exactly what was and was not found>","recommendations":[{"issue":"<specific gap>","fix":"<specific fix that reflects actual site state>","businessImpact":"<impact>"},...]}`,
       dsKey, 900);
 
     // Executive summary — separate AI call for a proper narrative
