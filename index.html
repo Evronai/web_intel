@@ -1757,27 +1757,20 @@ loadBranding();
 function savePDF() {
   const url = document.getElementById('resUrl').textContent || 'report';
   const host = url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0];
-
   const resCard = document.getElementById('resCard');
   if (!resCard || resCard.style.display === 'none') {
     alert('Run an analysis first before saving the PDF.');
     return;
   }
 
-  // Collect all inline styles from this page
-  const styles = [...document.querySelectorAll('style')]
-    .map(el => el.innerHTML).join('\n');
-
-  // Clone results card and make all sections visible
+  // Clone and prepare for print
   const clone = resCard.cloneNode(true);
-  clone.querySelectorAll('.tab-pane').forEach(p => { p.style.display = 'block'; p.style.marginBottom = '24px'; });
-  clone.querySelectorAll('.tabs, .save-pdf-btn').forEach(el => el.style.display = 'none');
+  clone.querySelectorAll('.tab-pane').forEach(p => p.setAttribute('style','display:block;margin-bottom:24px'));
+  clone.querySelectorAll('.tabs,.save-pdf-btn').forEach(el => el.setAttribute('style','display:none'));
+  const bh = clone.querySelector('.brand-header');
+  if (bh) bh.setAttribute('style','display:flex;align-items:center;gap:14px;padding-bottom:18px;margin-bottom:18px;border-bottom:1px solid #dde1ed');
 
-  // Open a blank popup — no URL in the address bar, no browser headers in print
-  const win = window.open('', '_blank', 'width=900,height=700');
-  if (!win) { alert('Please allow popups for this site to save PDF.'); return; }
-
-  win.document.write(`<!DOCTYPE html>
+  const reportHTML = `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
@@ -1785,41 +1778,76 @@ function savePDF() {
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,600;0,9..144,700;1,9..144,300;1,9..144,600&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
 <style>
-${styles}
-@page { margin: 12mm; size: A4; }
-body { background: #fff !important; margin: 0; padding: 16px; }
-:root {
-  --bg:#fff; --bg2:#f7f8fc; --surface:#fff; --surface2:#f2f4fb;
-  --border:#dde1ed; --border2:#c8cedf; --text:#0a0e1a; --muted:#5a6380;
-  --accent:#1a4fd6; --accent2:#0a9e72; --danger:#cc2222; --warn:#c97000;
-  --r:12px;
-}
-.card { border: none !important; box-shadow: none !important; padding: 0 !important; }
-.tab-pane { display: block !important; margin-bottom: 24px !important; }
-.tab-pane + .tab-pane { border-top: 1px solid #dde1ed; padding-top: 20px; }
-.tabs, .save-pdf-btn { display: none !important; }
-.score-ring { background: #e8edff !important; border: 3px solid #1a4fd6 !important; box-shadow: none !important; }
-.score-ring::before { background: #fff !important; }
-.score-num { color: #1a4fd6 !important; }
-.rec.critical { background: #fee2e2 !important; }
-.rec.high     { background: #fff3e0 !important; }
-.rec.medium   { background: #e6faf4 !important; }
-.insight { background: #f0f4ff !important; border-color: #c0d0ff !important; }
-.sc-bar { background: #e0e4ef !important; }
-* { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+@page{margin:12mm;size:A4}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}
+body{font-family:'Outfit',sans-serif;background:#fff;color:#0a0e1a;line-height:1.6;padding:12px 16px}
+.res-head{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:14px;padding-bottom:18px;margin-bottom:22px;border-bottom:1px solid #dde1ed}
+.url-pill{background:#f7f8fc;border:1px solid #c8cedf;border-radius:40px;padding:6px 14px;font-family:'JetBrains Mono',monospace;font-size:.75rem;color:#0a0e1a;max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.meta-pills{display:flex;align-items:center;gap:10px}
+.meta-pill{font-size:.72rem;color:#5a6380;background:#f7f8fc;border:1px solid #c8cedf;padding:4px 12px;border-radius:40px}
+.meta-pill.cached{color:#0a9e72;border-color:rgba(10,158,114,.25);background:rgba(10,158,114,.06)}
+.score-ring{width:80px;height:80px;border-radius:50%;background:#e8edff;border:3px solid #1a4fd6;display:flex;flex-direction:column;align-items:center;justify-content:center;position:relative}
+.score-ring-inner{position:relative;z-index:1;text-align:center}
+.score-num{font-family:'Fraunces',serif;font-size:1.6rem;font-weight:600;color:#1a4fd6;line-height:1}
+.score-lbl{font-size:.58rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#5a6380}
+.tab-pane{display:block!important;margin-bottom:24px}
+.tab-pane+.tab-pane{border-top:1px solid #dde1ed;padding-top:20px}
+.tabs,.save-pdf-btn{display:none!important}
+.score-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:22px}
+.score-card{background:#f7f8fc;border:1px solid #dde1ed;border-radius:10px;padding:18px}
+.sc-head{font-size:.68rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#5a6380;display:flex;align-items:center;gap:6px;margin-bottom:10px}
+.sc-head i{color:#1a4fd6}
+.sc-val{font-family:'Fraunces',serif;font-size:2rem;font-weight:600;color:#0a0e1a;line-height:1}
+.sc-val span{font-size:1rem;font-weight:300;color:#5a6380;font-family:'Outfit',sans-serif}
+.sc-bar{height:4px;background:#e0e4ef;border-radius:2px;margin-top:10px;overflow:hidden}
+.sc-bar-fill{height:100%;border-radius:2px}
+.sc-meta{font-size:.72rem;color:#5a6380;margin-top:6px}
+.insight{background:#f0f4ff;border:1px solid #c0d0ff;border-radius:10px;padding:18px 20px;margin-bottom:22px}
+.insight-head{font-size:.68rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#1a4fd6;display:flex;align-items:center;gap:7px;margin-bottom:8px}
+.insight-body{font-size:.875rem;color:#0a0e1a;line-height:1.7}
+.recs{display:flex;flex-direction:column;gap:9px}
+.rec{padding:12px 14px;border-radius:8px;border-left:3px solid;display:flex;gap:11px;align-items:flex-start}
+.rec.critical{background:#fee2e2;border-left-color:#cc2222}
+.rec.high{background:#fff3e0;border-left-color:#c97000}
+.rec.medium{background:#e6faf4;border-left-color:#0a9e72}
+.rec-sev{font-size:.62rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;white-space:nowrap;margin-top:2px}
+.critical .rec-sev{color:#cc2222}.high .rec-sev{color:#c97000}.medium .rec-sev{color:#0a9e72}
+.rec-text{font-size:.84rem;color:#0a0e1a;line-height:1.55}
+.sec-hdr{font-size:.82rem;font-weight:600;color:#0a0e1a;display:flex;align-items:center;gap:7px;margin:20px 0 12px}
+.sec-hdr i{color:#1a4fd6;font-size:11px}
+.detail-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:6px}
+.detail-card{background:#f7f8fc;border:1px solid #dde1ed;border-radius:10px;padding:18px;page-break-inside:avoid}
+.detail-card-hdr{font-size:.68rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#5a6380;display:flex;align-items:center;gap:7px;margin-bottom:12px}
+.detail-card-hdr i{color:#1a4fd6}
+.drow{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #dde1ed;font-size:.8rem}
+.drow:last-child{border:none}
+.dk{color:#5a6380}
+.dv{font-family:'JetBrains Mono',monospace;font-size:.75rem;font-weight:500;color:#0a0e1a}
+.dv.ok{color:#0a9e72}.dv.bad{color:#cc2222}.dv.warn{color:#c97000}
+.js-warn{display:flex;gap:14px;align-items:flex-start;background:#fff8ed;border:1px solid #c97000;border-radius:10px;padding:14px 18px;margin-bottom:22px;font-size:.85rem}
+.js-warn i{color:#c97000;font-size:1.1rem;margin-top:2px;flex-shrink:0}
+.js-warn strong{color:#c97000;display:block;margin-bottom:3px;font-size:.88rem}
+.js-warn div div{color:#5a6380;line-height:1.55}
+.brand-header{display:flex;align-items:center;gap:14px;padding-bottom:18px;margin-bottom:18px;border-bottom:1px solid #dde1ed}
+.brand-logo{height:44px;max-width:120px;border-radius:8px;object-fit:contain}
+.brand-name{font-family:'Fraunces',serif;font-size:1.15rem;font-weight:600;color:#0a0e1a;letter-spacing:-.02em}
+.brand-sub{font-size:.68rem;color:#5a6380;margin-top:2px;text-transform:uppercase;letter-spacing:.1em;font-weight:600}
+.src-badge{font-size:9px;font-weight:700;padding:3px 8px;border-radius:4px;display:inline-flex;align-items:center;gap:4px;margin-bottom:9px;text-transform:uppercase}
 </style>
 </head>
-<body>
-<div class="card">${clone.innerHTML}</div>
-</body>
-</html>`);
-  win.document.close();
-  win.focus();
-  // Small delay to let fonts load before printing
-  setTimeout(() => {
-    win.print();
-    setTimeout(() => win.close(), 1500);
-  }, 800);
+<body>${clone.outerHTML}</body>
+</html>`;
+
+  const blob = new Blob([reportHTML], { type: 'text/html;charset=utf-8' });
+  const blobUrl = URL.createObjectURL(blob);
+  const win = window.open(blobUrl, '_blank');
+  if (!win) { alert('Please allow popups for this site to save the PDF.'); URL.revokeObjectURL(blobUrl); return; }
+  win.addEventListener('load', () => {
+    setTimeout(() => {
+      win.print();
+      setTimeout(() => { win.close(); URL.revokeObjectURL(blobUrl); }, 1500);
+    }, 600);
+  });
 }
 </script>
 </body>
