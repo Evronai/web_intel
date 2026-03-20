@@ -1836,7 +1836,7 @@ function display(data, url, fromCache) {
       // Update the serpPill to also show GEO
       const sp = document.getElementById('serpPill');
       if (sp) sp.textContent = '📊 Live SERP + GEO';
-    } else if (serpKey || document.getElementById('serpKey')?.value?.trim()) {
+    } else if (document.getElementById('serpKey')?.value?.trim()) {
       geoCard = detailCard('GEO Visibility (Google AI Overview)', 'robot', [
         ['Status', 'No AI Overview results found for checked keywords — site not yet appearing in AI-generated answers', 'warn'],
         ['Keywords', geoData?.keywords?.join(', ') || 'None derived — add Industry/Region fields for better results'],
