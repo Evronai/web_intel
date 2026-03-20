@@ -468,6 +468,11 @@ body {
    - Breaks pages sensibly
 ════════════════════════════════════════ */
 @media print {
+  @page {
+    margin: 10mm;
+    size: A4;
+  }
+
   /* Force light background for printing */
   :root {
     --bg:        #ffffff;
@@ -1750,20 +1755,71 @@ loadBranding();
 //  Print CSS shows all tab panes, hides UI
 // ════════════════════════════════════════
 function savePDF() {
-  // Set a meaningful document title so the PDF filename is sensible
-  const url  = document.getElementById('resUrl').textContent || 'report';
+  const url = document.getElementById('resUrl').textContent || 'report';
   const host = url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0];
-  const prev = document.title;
-  document.title = `WebIntel Report — ${host}`;
 
-  // Show all tab panes before printing (print CSS does this via display:block !important
-  // but we also need the content to be rendered, not just CSS-visible)
-  // Tab panes already have their content — print CSS handles visibility.
+  const resCard = document.getElementById('resCard');
+  if (!resCard || resCard.style.display === 'none') {
+    alert('Run an analysis first before saving the PDF.');
+    return;
+  }
 
-  window.print();
+  // Collect all inline styles from this page
+  const styles = [...document.querySelectorAll('style')]
+    .map(el => el.innerHTML).join('\n');
 
-  // Restore title after print dialog closes
-  setTimeout(() => { document.title = prev; }, 1000);
+  // Clone results card and make all sections visible
+  const clone = resCard.cloneNode(true);
+  clone.querySelectorAll('.tab-pane').forEach(p => { p.style.display = 'block'; p.style.marginBottom = '24px'; });
+  clone.querySelectorAll('.tabs, .save-pdf-btn').forEach(el => el.style.display = 'none');
+
+  // Open a blank popup — no URL in the address bar, no browser headers in print
+  const win = window.open('', '_blank', 'width=900,height=700');
+  if (!win) { alert('Please allow popups for this site to save PDF.'); return; }
+
+  win.document.write(`<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>WebIntel Report — ${host}</title>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,600;0,9..144,700;1,9..144,300;1,9..144,600&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+<style>
+${styles}
+@page { margin: 12mm; size: A4; }
+body { background: #fff !important; margin: 0; padding: 16px; }
+:root {
+  --bg:#fff; --bg2:#f7f8fc; --surface:#fff; --surface2:#f2f4fb;
+  --border:#dde1ed; --border2:#c8cedf; --text:#0a0e1a; --muted:#5a6380;
+  --accent:#1a4fd6; --accent2:#0a9e72; --danger:#cc2222; --warn:#c97000;
+  --r:12px;
+}
+.card { border: none !important; box-shadow: none !important; padding: 0 !important; }
+.tab-pane { display: block !important; margin-bottom: 24px !important; }
+.tab-pane + .tab-pane { border-top: 1px solid #dde1ed; padding-top: 20px; }
+.tabs, .save-pdf-btn { display: none !important; }
+.score-ring { background: #e8edff !important; border: 3px solid #1a4fd6 !important; box-shadow: none !important; }
+.score-ring::before { background: #fff !important; }
+.score-num { color: #1a4fd6 !important; }
+.rec.critical { background: #fee2e2 !important; }
+.rec.high     { background: #fff3e0 !important; }
+.rec.medium   { background: #e6faf4 !important; }
+.insight { background: #f0f4ff !important; border-color: #c0d0ff !important; }
+.sc-bar { background: #e0e4ef !important; }
+* { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+</style>
+</head>
+<body>
+<div class="card">${clone.innerHTML}</div>
+</body>
+</html>`);
+  win.document.close();
+  win.focus();
+  // Small delay to let fonts load before printing
+  setTimeout(() => {
+    win.print();
+    setTimeout(() => win.close(), 1500);
+  }, 800);
 }
 </script>
 </body>
