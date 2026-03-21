@@ -1181,24 +1181,29 @@ function extractContent(input) {
     const canonMatch = md.match(/URL:\s*(https?:\/\/[^\s\n]+)/i);
     if (canonMatch) m.canonical = canonMatch[1];
 
-    // Improved phone detection
+    // Phone detection (improved)
     const phonePattern = /(?:\+\d{1,3}\s*)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/i;
     const hasTelLink = /\[.*?\]\(tel:/i.test(md);
     const hasPhoneText = phonePattern.test(md);
     const hasTrinidadPhone = /\(?868\)?[\s.-]?\d{3}[\s.-]?\d{4}/i.test(md);
     m.hasPhone = hasTelLink || hasPhoneText || hasTrinidadPhone;
 
-    // Address detection — only physical address indicators
+    // Address detection (strict: street, postal code, "address" label)
     const addressPatterns = [
       /\baddress\b[:\s]+/i,
       /streetAddress|addressLocality|postalCode/i,
       /(?:p\.?o\.?\s+box|mailbox)/i,
-      /port\s+of\s+spain|san\s+fernando|chaguanas|arima|tobago|trinidad/i,
       /\d+\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\s+(?:street|st\.?|avenue|ave\.?|road|rd\.?|drive|dr\.?|lane|ln\.?|boulevard|blvd)/i,
-      /[A-Z]{1,2}\d{1,2}\s*\d[A-Z]{2}/i,
-      /\b\d{5}(?:-\d{4})?\b/
+      /[A-Z]{1,2}\d{1,2}\s*\d[A-Z]{2}/i,      // UK postcode
+      /\b\d{5}(?:-\d{4})?\b/                 // US ZIP
     ];
     m.hasAddress = addressPatterns.some(p => p.test(md));
+
+    // Separate flag for location hints (city/country) – not an address
+    const locationHints = /port\s+of\s+spain|san\s+fernando|chaguanas|arima|tobago|trinidad/i;
+    m.hasLocationHint = locationHints.test(md);
+
+    // Contact info block (store name, contact information heading)
     m.hasContactInfoBlock = /contact\s+information|store\s+name:\s*/i.test(md);
 
     // Library detection from Jina output
@@ -1222,7 +1227,7 @@ function extractContent(input) {
     m.isJSRendered  = false; // Jina already rendered it — content is real
     m.jsFramework   = null;
     m.bodyWordCount = bodyWordCount;
-    m.fromJina      = true;
+    m.fromJina      = true; // Flag so we know data is trustworthy
 
     return { m, body };
   }
@@ -1257,20 +1262,24 @@ function extractContent(input) {
   m.https       = /^https:/i.test(m.canonical || 'x');
   m.hasLocalBiz = /LocalBusiness|localBusiness/i.test(html);
 
-  // Address detection — only physical address indicators
+  // Address detection (strict)
   const addressPatterns = [
     /<address[\s>]/i,
     /addressLocality|streetAddress|addressRegion/i,
-    /port\s+of\s+spain|san\s+fernando|chaguanas|arima|punto\s+a\s+pierre|tobago|trinidad/i,
     /\d+\s+[\w\s]{3,30}(street|st\.?|avenue|ave\.?|road|rd\.?|drive|dr\.?|lane|ln\.?|boulevard|blvd)/i,
     /[A-Z]{1,2}\d{1,2}\s*\d[A-Z]{2}/i,
     /\b\d{5}(-\d{4})?\b/,
     /(?:our\s+)?(?:address|location|find\s+us|visit\s+us)\s*[:]/i
   ];
   m.hasAddress = addressPatterns.some(p => p.test(html));
+
+  // Location hints (city/country)
+  const locationHints = /port\s+of\s+spain|san\s+fernando|chaguanas|arima|punto\s+a\s+pierre|tobago|trinidad/i;
+  m.hasLocationHint = locationHints.test(html);
+
   m.hasContactInfoBlock = /contact\s+information|store\s+name:\s*/i.test(html);
 
-  // Improved phone detection
+  // Phone detection
   const phonePattern = /(?:\+\d{1,3}\s*)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/i;
   const hasTelLink = /<a[^>]+href=["']tel:[^"']+["']/i.test(html);
   const hasPhoneText = phonePattern.test(html);
@@ -1346,6 +1355,7 @@ async function fetchSite(url) {
   const enc = encodeURIComponent(url);
 
   // 1. Try Jina.ai Reader — renders JavaScript, returns clean text/markdown
+  //    Free, no key required, handles Shopify/React/Next.js sites
   try {
     const jinaUrl = `https://r.jina.ai/${url}`;
     const r = await fetch(jinaUrl, {
@@ -1355,6 +1365,8 @@ async function fetchSite(url) {
     if (r.ok) {
       const text = await r.text();
       if (text && text.length > 300) {
+        // Jina returns markdown — wrap in a pseudo-HTML so extractContent still works
+        // but also embed the raw markdown for richer body text extraction
         return `<jina-rendered>${text}</jina-rendered><body>${text}</body>`;
       }
     }
@@ -1416,6 +1428,7 @@ async function callDS(system, user, key, maxTokens = 900) {
       })
     });
   } catch(netErr) {
+    // Network-level failure — CORS, DNS, or connectivity
     throw new Error(`Network error reaching DeepSeek API — check your internet connection. (${netErr.message})`);
   }
 
@@ -1443,6 +1456,8 @@ function onSerpInput() {
 
 // ════════════════════════════════════════
 //  SERPAPI — real SERP data (free tier: 100/mo)
+//  Fetches: organic position, featured snippet,
+//  knowledge panel, top queries for the domain
 // ════════════════════════════════════════
 async function callSerpAPI(domain, serpKey) {
   if (!serpKey) return null;
@@ -1450,6 +1465,7 @@ async function callSerpAPI(domain, serpKey) {
   const cleanDomain = domain.replace(/^https?:\/\/(www\.)?/, '').split('/')[0];
   const serpUrl = `https://serpapi.com/search.json?api_key=${encodeURIComponent(serpKey)}&engine=google&q=${encodeURIComponent('site:' + cleanDomain)}&num=10`;
 
+  // Try two proxies for SerpAPI
   const proxies = [
     `https://api.allorigins.win/get?url=${encodeURIComponent(serpUrl)}`,
     `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(serpUrl)}`,
@@ -1461,6 +1477,7 @@ async function callSerpAPI(domain, serpKey) {
       const resp = await fetch(proxyUrl, { signal: AbortSignal.timeout(12000) });
       if (!resp.ok) { lastErr = `HTTP ${resp.status}`; continue; }
 
+      // allorigins wraps in {contents:...}, codetabs returns raw
       let text;
       const ct = resp.headers.get('content-type') || '';
       if (ct.includes('application/json')) {
@@ -1475,6 +1492,7 @@ async function callSerpAPI(domain, serpKey) {
       let data;
       try { data = JSON.parse(text); } catch { lastErr = 'JSON parse failed'; continue; }
 
+      // SerpAPI error responses
       if (data.error) {
         if (/invalid.*api.*key|authenticate|unauthorized/i.test(data.error))
           throw new Error('Invalid SerpAPI key — check your key at serpapi.com');
@@ -1508,27 +1526,34 @@ async function callSerpAPI(domain, serpKey) {
     }
   }
 
+  // Both proxies failed — log but don't crash the analysis
   console.warn('SerpAPI unavailable:', lastErr);
   return null;
 }
 
 // ════════════════════════════════════════
 //  GEO API — Google AI Overview + AI Mode
+//  Checks if the domain appears in AI-generated
+//  answers for relevant keywords
 // ════════════════════════════════════════
 async function callGEO(url, serpKey, industry, region, pageTitle) {
   if (!serpKey) return null;
 
   const domain = url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0];
 
+  // Derive 2-3 keywords from available context
   const keywords = [];
   if (industry && region) keywords.push(`${industry} ${region}`);
   if (industry)           keywords.push(industry);
+  // Extract brand/topic from title — strip domain suffixes
   const titleClean = (pageTitle || domain).replace(/\.[a-z]{2,}$/i,'').replace(/[-_]/g,' ').trim();
   if (titleClean && titleClean.length > 3) keywords.push(titleClean);
+  // Fallback
   if (!keywords.length) keywords.push(domain.split('.')[0]);
 
   const uniqueKws = [...new Set(keywords)].slice(0, 3);
 
+  // Helper — proxy a SerpAPI call and parse response
   async function serpFetch(apiUrl) {
     const proxies = [
       `https://api.allorigins.win/get?url=${encodeURIComponent(apiUrl)}`,
@@ -1553,15 +1578,17 @@ async function callGEO(url, serpKey, industry, region, pageTitle) {
 
   const geoResults = {
     keywords: uniqueKws,
-    aiOverview: [],
-    aiMode:     [],
+    aiOverview: [],   // per-keyword AI Overview results
+    aiMode:     [],   // per-keyword AI Mode results
     domainMentioned: false,
     mentionedIn: [],
     totalChecked: 0,
   };
 
+  // Check each keyword in parallel
   await Promise.allSettled(uniqueKws.map(async (kw) => {
     try {
+      // Step 1: regular search to get ai_overview page_token
       const searchUrl = `https://serpapi.com/search.json?api_key=${encodeURIComponent(serpKey)}&engine=google&q=${encodeURIComponent(kw)}&num=5`;
       const searchData = await serpFetch(searchUrl);
       if (!searchData) return;
@@ -1570,6 +1597,7 @@ async function callGEO(url, serpKey, industry, region, pageTitle) {
 
       const kwResult = { keyword: kw, hasAIOverview: false, mentioned: false, sources: [] };
 
+      // Check embedded AI Overview in search results
       if (searchData.ai_overview) {
         kwResult.hasAIOverview = true;
         const overviewText = JSON.stringify(searchData.ai_overview).toLowerCase();
@@ -1578,10 +1606,12 @@ async function callGEO(url, serpKey, industry, region, pageTitle) {
           geoResults.domainMentioned = true;
           geoResults.mentionedIn.push(`AI Overview: "${kw}"`);
         }
+        // Extract cited sources
         const refs = searchData.ai_overview?.references || searchData.ai_overview?.sources || [];
         kwResult.sources = refs.slice(0, 3).map(r => r.title || r.link || '');
       }
 
+      // Step 2: fetch full AI Overview if page_token exists
       if (searchData.ai_overview?.page_token) {
         const aoUrl = `https://serpapi.com/search.json?api_key=${encodeURIComponent(serpKey)}&engine=google_ai_overview&page_token=${encodeURIComponent(searchData.ai_overview.page_token)}`;
         const aoData = await serpFetch(aoUrl);
@@ -1601,6 +1631,7 @@ async function callGEO(url, serpKey, industry, region, pageTitle) {
     } catch(e) { console.warn('GEO check failed for', kw, e.message); }
   }));
 
+  // Compute GEO visibility score
   const mentionRate = geoResults.totalChecked > 0
     ? geoResults.mentionedIn.length / geoResults.totalChecked
     : 0;
@@ -1651,6 +1682,7 @@ function drawSparkline(canvasId, values) {
   const max = Math.max(...vals) + 5;
   const xStep = W / (vals.length - 1);
   const yScale = (v) => H - ((v - min) / (max - min)) * (H - 6) - 3;
+  // Gradient fill
   const grad = ctx.createLinearGradient(0, 0, 0, H);
   grad.addColorStop(0, 'rgba(245,158,11,0.25)');
   grad.addColorStop(1, 'rgba(245,158,11,0)');
@@ -1661,14 +1693,17 @@ function drawSparkline(canvasId, values) {
   ctx.closePath();
   ctx.fillStyle = grad;
   ctx.fill();
+  // Line
   ctx.beginPath();
   vals.forEach((v, i) => i === 0 ? ctx.moveTo(0, yScale(v)) : ctx.lineTo(i * xStep, yScale(v)));
   ctx.strokeStyle = '#f59e0b';
   ctx.lineWidth = 2;
   ctx.stroke();
+  // Last point dot
   const lx = (vals.length - 1) * xStep, ly = yScale(vals[vals.length - 1]);
   ctx.beginPath(); ctx.arc(lx, ly, 3, 0, Math.PI * 2);
   ctx.fillStyle = '#f59e0b'; ctx.fill();
+  // Label
   ctx.fillStyle = '#e8edf7'; ctx.font = '10px Outfit, sans-serif';
   ctx.fillText(vals[vals.length - 1], Math.max(0, lx - 10), Math.max(12, ly - 5));
 }
@@ -1679,11 +1714,13 @@ function drawSparkline(canvasId, values) {
 function display(data, url, fromCache) {
   const { security: sec, seo, aiSearch: ai, local, totalTokens, serpData, geoData, meta, competitors, industry, region } = data;
 
+  // Refresh brand header
   updateBrandHeader();
 
+  // Score history delta
   const domain = url.replace(/^https?:\/\/(www\.)?/,'').split('/')[0];
   const hist   = HISTORY.get(domain) || [];
-  const prev   = hist.length >= 2 ? hist[hist.length - 2] : null;
+  const prev   = hist.length >= 2 ? hist[hist.length - 2] : null; // second-to-last = previous run
 
   function delta(now, before) {
     if (!Number.isFinite(before) || !Number.isFinite(now)) return '';
@@ -1692,7 +1729,7 @@ function display(data, url, fromCache) {
     const col = d > 0 ? 'var(--accent2)' : 'var(--danger)';
     return ` <span style="color:${col};font-size:0.65rem">${d > 0 ? '▲' : '▼'}${Math.abs(d)}</span>`;
   }
-
+  // JS-render warning
   const warn = document.getElementById('jsWarn');
   if (meta?.isJSRendered) {
     const framework = meta.jsFramework ? ` (${meta.jsFramework} detected)` : '';
@@ -1703,6 +1740,7 @@ function display(data, url, fromCache) {
     if (warn) warn.style.display = 'none';
   }
 
+  // Header
   setText('resUrl', url);
   const breakdown = Object.entries(data.tokenBreakdown || {})
     .map(([k, v]) => `${k}: ${v}`)
@@ -1714,9 +1752,11 @@ function display(data, url, fromCache) {
   const serpPill = document.getElementById('serpPill');
   if (serpPill) serpPill.style.display = serpData ? 'inline-block' : 'none';
 
+  // Overall score + conic ring
   const scores = [sec?.score, seo?.score, ai?.score, local?.score].filter(Number.isFinite);
   const overall = scores.length ? Math.round(scores.reduce((a,b)=>a+b,0)/scores.length) : 0;
   setText('overallNum', overall || '—');
+  // Show delta on ring if we have previous data
   const overallDeltaEl = document.getElementById('overallDelta');
   if (overallDeltaEl && prev && overall) {
     const d = overall - prev.overall;
@@ -1731,6 +1771,7 @@ function display(data, url, fromCache) {
   ring.style.background = `conic-gradient(${col} ${overall * 3.6}deg, var(--surface2) ${overall * 3.6}deg)`;
   document.querySelector('.score-num').style.color = col;
 
+  // Score cards
   function fillCard(prefix, d, metaStr, prevScore) {
     if (!d) return;
     const s = d.score || 0;
@@ -1746,6 +1787,7 @@ function display(data, url, fromCache) {
   fillCard('ai',    ai,    ai    ? `${ai.optimizationGap ?? 0}% optimisation gap`     : '—', prev?.ai);
   fillCard('local', local, local ? `${local.citations ?? 0} citation signals`         : '—', prev?.local);
 
+  // Executive summary — use dedicated AI narrative if available
   const execData = data.execSummary;
   if (execData?.narrative) {
     const execEl = document.getElementById('exec-body');
@@ -1774,6 +1816,7 @@ function display(data, url, fromCache) {
       }
     }
   } else {
+    // Fallback to data dump if execSummary failed
     const parts = [];
     if (sec)   parts.push(`Security: ${sec.score}/100 — ${sec.criticalIssues ?? 0} critical issue(s).`);
     if (seo)   parts.push(`SEO: ${seo.score}/100 — ${seo.issues ?? 0} issue(s).`);
@@ -1782,6 +1825,7 @@ function display(data, url, fromCache) {
     setText('exec-body', parts.join(' ') || 'Analysis complete.');
   }
 
+  // Recommendations — with business impact
   const normaliseRecs = (arr) => {
     if (!arr) return [];
     return arr.map(r => typeof r === 'string' ? { issue: r, fix: r, businessImpact: null } : r);
@@ -1826,6 +1870,7 @@ function display(data, url, fromCache) {
     recList.innerHTML = '<p style="color:var(--muted);font-size:0.8rem">No recommendations generated.</p>';
   }
 
+  // Tab insights with industry benchmark
   function buildTabInsight(id, data, prefix) {
     const el = document.getElementById(id);
     if (!el || !data) return;
@@ -1892,6 +1937,8 @@ function display(data, url, fromCache) {
 
   if (ai) {
     buildTabInsight('ai-body', ai, 'ai');
+
+    // Real GEO data card if available
     let geoCard = '';
     if (geoData && geoData.totalChecked > 0) {
       const geoRows = [
@@ -1902,6 +1949,7 @@ function display(data, url, fromCache) {
         ['Mentioned In',       geoData.mentionedIn.join(', ') || 'None detected'],
       ];
       geoCard = detailCard('Live GEO Data (Google AI Overview)', 'robot', geoRows);
+      // Update the serpPill to also show GEO
       const sp = document.getElementById('serpPill');
       if (sp) sp.textContent = '📊 Live SERP + GEO';
     } else if (document.getElementById('serpKey')?.value?.trim()) {
@@ -1910,6 +1958,7 @@ function display(data, url, fromCache) {
         ['Keywords', geoData?.keywords?.join(', ') || 'None derived — add Industry/Region fields for better results'],
       ]);
     }
+
     document.getElementById('ai-details').innerHTML =
       detailCard('AI Readiness Signals', 'robot', [
         ['Score',               ai.score + '/100'],
@@ -1937,6 +1986,7 @@ function display(data, url, fromCache) {
     ]);
   }
 
+  // Score trend sparklines
   const trendSec = document.getElementById('trend-section');
   if (hist.length >= 2 && trendSec) {
     trendSec.style.display = 'block';
@@ -1948,6 +1998,7 @@ function display(data, url, fromCache) {
     trendSec.style.display = 'none';
   }
 
+  // Competitor comparison tab
   const compBtn = document.getElementById('tab-btn-competitor');
   const compTable = document.getElementById('comp-table');
   const compSummary = document.getElementById('comp-summary');
@@ -1959,6 +2010,7 @@ function display(data, url, fromCache) {
       { url, security: sec?.score, seo: seo?.score, aiSearch: ai?.score, local: local?.score, overall, isTarget: true },
       ...competitors,
     ];
+    // Build comparison table safely
     const table = document.createElement('table');
     table.className = 'comp-table';
     const thead = document.createElement('thead');
@@ -2028,9 +2080,11 @@ async function run() {
   if (!dsKey) { showErr('Please enter your DeepSeek API key.'); return; }
   if (!url.startsWith('http')) { showErr('URL must start with http:// or https://'); return; }
 
+  // Cache check
   const cached = getCache(url);
   if (cached) { display(cached, url, true); return; }
 
+  // Show loading immediately — before any async work
   btn.disabled = true;
   resCard.style.display  = 'none';
   loadCard.style.display = 'block';
@@ -2045,10 +2099,12 @@ async function run() {
   const enabled = Object.keys(mods).filter(k => mods[k]);
 
   try {
+    // Stage 1 — Fetch
     setProgress(5, 'Fetching website…', 'Connecting to target');
 
     const html = await fetchSite(url);
 
+    // Stage 2 — Extract content + crawl sub-pages for accuracy
     setProgress(15, 'Fetching additional pages…', 'Contact, About — checking NAP signals');
     setStages([
       { l: 'Fetch website',   s: 'done' },
@@ -2057,11 +2113,14 @@ async function run() {
       { l: 'Build report',    s: '' },
     ]);
 
+    // Extract homepage content
     const { m, body } = extractContent(html);
 
+    // Derive base URL for sub-page fetching
     const baseUrl = url.replace(/\/$/, '').replace(/\/[^/]*$/, '') || url.replace(/\/$/, '');
     const origin  = new URL(url).origin;
 
+    // Common pages that contain NAP, contact info, local signals
     const subPageSlugs = [
       '/contact', '/contact-us', '/contactus', '/contact/', '/contact-us/',
       '/about', '/about-us', '/aboutus',
@@ -2082,8 +2141,9 @@ async function run() {
     const pagesToCheck = [...new Set([
       ...subPageSlugs.map(s => origin + s),
       ...linkedPages,
-    ])].slice(0, 5);
+    ])].slice(0, 5); // max 5 sub-pages to keep it fast
 
+    // Fetch sub-pages in parallel — silently skip failures
     const subPageResults = await Promise.allSettled(
       pagesToCheck.map(async (pageUrl) => {
         try {
@@ -2094,12 +2154,15 @@ async function run() {
       })
     );
 
+    // Merge NAP signals across all pages
     const subPageData = subPageResults
       .filter(r => r.status === 'fulfilled' && r.value?.success)
       .map(r => r.value);
 
     const allPages = [{ m, body, pageUrl: url }, ...subPageData];
 
+    // Track which specific pages were successfully crawled
+    // Track which pages were attempted but failed
     const failedSubPages = subPageResults
       .filter(r => r.status === 'fulfilled' && r.value && !r.value.success)
       .map(r => r.value.pageUrl)
@@ -2114,9 +2177,11 @@ async function run() {
         hasPhone:   p.m?.hasPhone   || false,
       }));
 
+    // Check if a contact page exists in nav links even if we couldn't fetch it
     const contactLinkExists = /href=["'][^"']*contact[^"']*/i.test(html);
     const aboutLinkExists   = /href=["'][^"']*about[^"']*/i.test(html);
 
+    // A signal is TRUE if found on ANY crawled page
     const merged = {
       hasAddress:          allPages.some(p => p.m?.hasAddress),
       hasPhone:            allPages.some(p => p.m?.hasPhone),
@@ -2125,6 +2190,7 @@ async function run() {
       hasSchema:           allPages.some(p => p.m?.hasSchema),
       hasContactPage:      contactPagesCrawled.length > 0 || contactLinkExists,
       hasContactInfoBlock: allPages.some(p => p.m?.hasContactInfoBlock),
+      hasLocationHint:     allPages.some(p => p.m?.hasLocationHint),
       contactPageFetched:  contactPagesCrawled.length > 0,
       contactLinkInNav:    contactLinkExists,
       aboutLinkInNav:      aboutLinkExists,
@@ -2136,6 +2202,7 @@ async function run() {
       pagesAttempted:      pagesToCheck.length + 1,
     };
 
+    // Build contact page text excerpt for AI context
     const contactPageExcerpt = subPageData
       .filter(p => /contact/i.test(p.pageUrl || ''))
       .map(p => p.body?.slice(0, 800) || '')
@@ -2144,6 +2211,7 @@ async function run() {
 
     setProgress(20, 'Extracting content…', `Analysed ${merged.crawledPages} pages`);
 
+    // Build structured context — uses merged signals from all crawled pages
     const ctx = [
       `URL: ${url}`,
       `HTTPS: ${url.startsWith('https') ? 'yes' : 'no'}`,
@@ -2160,10 +2228,11 @@ async function run() {
       `Links: ${m.links}`,
       `Schema markup (any page): ${merged.hasSchema ? 'yes' : 'no'}`,
       `LocalBusiness schema (any page): ${merged.hasLocalBiz ? 'yes' : 'no'}`,
-      `Address found (any page): ${merged.hasAddress ? 'YES — physical address detected' : (merged.contactLinkInNav && (m.isJSRendered || !merged.contactPageFetched)) ? 'UNKNOWN — contact page exists but content is JavaScript-rendered. Address may be present but could not be verified.' : 'NO — no physical address found on any crawled page'}`,
+      `Physical address found (any page): ${merged.hasAddress ? 'YES — street/postal address detected' : (merged.contactLinkInNav && (m.isJSRendered || !merged.contactPageFetched)) ? 'UNKNOWN — contact page exists but content is JavaScript-rendered. Address may be present but could not be verified.' : 'NO — no physical address found on any crawled page'}`,
       `Phone found (any page): ${merged.hasPhone ? 'YES — phone number detected' : (merged.contactLinkInNav && (m.isJSRendered || !merged.contactPageFetched)) ? 'UNKNOWN — contact page exists but content is JavaScript-rendered. Phone may be present but could not be verified.' : 'NO — not found on any crawled page'}`,
       `Contact page in navigation: ${merged.contactLinkInNav ? 'YES — link exists in site navigation' : 'no'}`,
       `Contact info block detected (any page): ${merged.hasContactInfoBlock ? 'YES — contact information section found' : 'NO'}`,
+      `Location hint (city/country) detected: ${merged.hasLocationHint ? 'YES — city/country mentioned' : 'NO'}`,
       `Contact page successfully fetched: ${merged.contactPageFetched ? 'YES' : 'NO — page blocked proxy fetch'}`,
       `FAQ content (any page): ${merged.hasFAQ ? 'yes' : 'no'}`,
       `Pages with contact info: ${merged.pagesWithContact} of ${merged.crawledPages}`,
@@ -2175,6 +2244,7 @@ async function run() {
       `Page text excerpt (homepage): ${body}`,
     ].join('\n');
 
+    // Stage 3 — Parallel AI calls
     setProgress(30, 'Running AI analysis…', `${enabled.length} modules + GEO check in parallel`);
     setStages([
       { l: 'Fetch website',   s: 'done' },
@@ -2205,9 +2275,10 @@ async function run() {
       dsKey, 900);
 
     if (mods.local) tasks.local = callDS(SYS,
-      `Analyse this website for local SEO signals. Region: ${region || 'not specified'}.\n${ctx}\n\n${RUBRIC}\n\nCRITICAL ACCURACY RULES:\n1. "Address Found" means a physical street address was detected. If false, the site may still have contact information (phone, email) without a physical location.\n2. "Contact info block detected" indicates the site provides contact details (phone, email) even if no physical address is present.\n3. If phone is YES but address is NO, do NOT recommend adding an address unless it is genuinely required for the business model.\n4. Only recommend adding NAP data if status is explicitly "NO — not found". UNKNOWN means unverifiable, not absent.\n5. For businesses that operate online-only, a missing physical address is not necessarily a problem.\n\nReturn ONLY:\n{"score":<0-100>,"napConsistency":"<Consistent|Inconsistent|Not fully verifiable>","localKeywords":<n>,"hasGBP":<bool>,"citations":<estimated n>,"hasLocalSchema":<bool>,"hasAddress":${merged.hasAddress},"hasPhone":${merged.hasPhone},"hasContactPage":${merged.hasContactPage},"industryBenchmark":"<benchmark>","summary":"<3-4 sentences — honest about JS-rendering limitations>","recommendations":[{"issue":"<only confirmed absent issues — nothing marked UNKNOWN>","fix":"<specific fix>","businessImpact":"<impact>"},...]}`,
+      `Analyse this website for local SEO signals. Region: ${region || 'not specified'}.\n${ctx}\n\n${RUBRIC}\n\nCRITICAL ACCURACY RULES:\n1. "Physical address found" means a street/postal address was detected. If false, the site may still have contact information (phone, email, contact form) without a physical location.\n2. "Contact info block detected" indicates the site provides contact details (phone, email) even if no physical address is present.\n3. If phone is YES but address is NO, do NOT recommend adding an address unless it is genuinely required for the business model.\n4. Only recommend adding NAP data if status is explicitly "NO — not found". UNKNOWN means unverifiable, not absent.\n5. For businesses that operate online-only, a missing physical address is not necessarily a problem.\n6. A "location hint" (city/country) is not a physical address.\n\nReturn ONLY:\n{"score":<0-100>,"napConsistency":"<Consistent|Inconsistent|Not fully verifiable>","localKeywords":<n>,"hasGBP":<bool>,"citations":<estimated n>,"hasLocalSchema":<bool>,"hasAddress":${merged.hasAddress},"hasPhone":${merged.hasPhone},"hasContactPage":${merged.hasContactPage},"industryBenchmark":"<benchmark>","summary":"<3-4 sentences — honest about JS-rendering limitations>","recommendations":[{"issue":"<only confirmed absent issues — nothing marked UNKNOWN>","fix":"<specific fix>","businessImpact":"<impact>"},...]}`,
       dsKey, 900);
 
+    // Build verified facts string — Jina data is fully trustworthy, proxy data has limitations
     const dataFromJina = m.fromJina;
     const phoneVerified   = merged.hasPhone || dataFromJina || (!merged.contactLinkInNav);
     const addressVerified = merged.hasAddress || dataFromJina || (!merged.contactLinkInNav);
@@ -2228,16 +2299,19 @@ async function run() {
         ? `Phone: confirmed ${merged.hasPhone ? 'present' : 'absent'}`
         : `Phone: NOT VERIFIED — site uses JS rendering and contact page content was not accessible. Make NO claims about phone presence or absence.`,
       addressVerified
-        ? `Address: confirmed ${merged.hasAddress ? 'present' : 'absent'}`
+        ? `Address: confirmed ${merged.hasAddress ? 'present (street/postal)' : 'absent'}`
         : `Address: NOT VERIFIED — site uses JS rendering and contact page content was not accessible. Make NO claims about address presence or absence.`,
       `Contact info block: ${merged.hasContactInfoBlock ? 'confirmed present' : 'not detected'}`,
+      `Location hint (city/country): ${merged.hasLocationHint ? 'present' : 'not detected'}`,
     ].filter(Boolean).join('\n');
 
     const jsRendered = !dataFromJina && (m.isJSRendered || merged.contactLinkInNav);
 
+    // Executive summary — separate AI call for a proper narrative
     tasks.execSummary = callDS(SYS,
       `Write an executive summary for a website intelligence report for ${siteDomain}.\nIndustry: ${industry || 'not specified'}. Region: ${region || 'not specified'}.\n\nYou MUST base your narrative ONLY on the verified facts below. Do not infer, assume, or hallucinate anything not explicitly stated.\n\nVERIFIED FACTS:\n${verifiedFacts}\n\nRULES:\n- Only mention phone/address if they appear in VERIFIED FACTS as confirmed present or absent\n- If the NOTE about JavaScript rendering is present, make NO claims about phone or address whatsoever\n- Only reference what is confirmed. Silence on unverifiable items is required.\n\nReturn ONLY:\n{"headline":"<one sentence verdict based only on verified facts>","narrative":"<3-5 sentences covering only confirmed findings — what works, what is confirmed missing, business impact>","topPriority":"<highest-ROI fix for a confirmed missing item>"}`,
       dsKey, 700).then(r => {
+        // Post-process: if site is JS-rendered with contact page, strip any phone/address hallucinations
         if (jsRendered && !merged.hasPhone && !merged.hasAddress) {
           try {
             const parsed = JSON.parse(r.text.replace(/^```(?:json)?\s*/i,'').replace(/\s*```\s*$/,'').trim());
@@ -2255,9 +2329,13 @@ async function run() {
         return r;
       });
 
+    // SerpAPI — runs in parallel, adds real SERP data to SEO tab
     const serpPromise = serpKey ? callSerpAPI(url, serpKey) : Promise.resolve(null);
+
+    // GEO API — checks AI Overview + AI Mode visibility for relevant keywords
     const geoPromise = serpKey ? callGEO(url, serpKey, industry, region, m.title) : Promise.resolve(null);
 
+    // Competitor analysis — fetch and analyse each competitor
     const compUrls = [comp1, comp2].filter(u => u && u.startsWith('http'));
     const compPromises = compUrls.map(async (cUrl) => {
       try {
@@ -2271,6 +2349,7 @@ async function run() {
       } catch { return null; }
     });
 
+    // Run everything in parallel
     let serpData = null;
     const [settled, serpResult, geoResult, ...compResults] = await Promise.all([
       Promise.allSettled(
@@ -2286,6 +2365,7 @@ async function run() {
     ]);
     serpData = serpResult;
 
+    // Stage 4 — Build report
     setProgress(90, 'Building report…', '');
     setStages([
       { l: 'Fetch website',   s: 'done' },
@@ -2315,10 +2395,13 @@ async function run() {
       throw new Error('AI returned responses that could not be parsed. Check your DeepSeek API key has credits and try again.');
     }
 
+    // Merge ground-truth extracted metadata over AI estimates
+    // (things AI can accurately read from our structured context, we verify here)
     if (analysisData.security) {
       analysisData.security.hasCSP = m.hasCSP;
     }
     if (analysisData.seo) {
+      // Override with values we actually extracted — more accurate than AI's interpretation
       if (m.title)    analysisData.seo.titleLength   = m.title.length;
       if (m.description !== undefined) analysisData.seo.metaLength = m.description.length;
       analysisData.seo.h1Count       = m.h1;
@@ -2337,6 +2420,7 @@ async function run() {
 
     setCache(url, analysisData);
 
+    // Record score history for delta tracking
     if (!HISTORY.has(siteDomain)) HISTORY.set(siteDomain, []);
     const scores = analysisData;
     const overallNow = [scores.security?.score, scores.seo?.score, scores.aiSearch?.score, scores.local?.score]
@@ -2369,12 +2453,16 @@ async function run() {
   }
 }
 
+// Enter to run
 document.getElementById('urlInput').addEventListener('keydown', e => {
   if (e.key === 'Enter') run();
 });
 
+// Load persisted branding on startup
 loadBranding();
 
+//  Print CSS shows all tab panes, hides UI
+// ════════════════════════════════════════
 function savePDF() {
   const url = document.getElementById('resUrl').textContent || 'report';
   const host = url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0];
@@ -2384,6 +2472,7 @@ function savePDF() {
     return;
   }
 
+  // Clone and prepare for print
   const clone = resCard.cloneNode(true);
   clone.querySelectorAll('.tab-pane').forEach(p => p.setAttribute('style','display:block;margin-bottom:24px'));
   clone.querySelectorAll('.tabs,.save-pdf-btn').forEach(el => el.setAttribute('style','display:none'));
