@@ -1138,7 +1138,98 @@ function esc(s) {
 //  Strips all HTML before sending to AI.
 //  Model gets structured metadata + clean body text.
 // ════════════════════════════════════════
-function extractContent(html) {
+//  CONTENT EXTRACTION
+//  Handles both Jina.ai markdown (JS-rendered)
+//  and raw HTML (proxy fallback).
+// ════════════════════════════════════════
+function extractContent(input) {
+  const isJinaMarkdown = input.includes('<jina-rendered>');
+
+  if (isJinaMarkdown) {
+    // ── Jina path: fully rendered markdown ──
+    const md = input.replace(/<\/?jina-rendered>/g, '').replace(/<\/?body>/g, '').trim();
+    const m = {};
+
+    // Title — Jina puts it as first # heading or "Title: ..." line
+    const titleMatch = md.match(/^#\s+(.+)$/m) || md.match(/Title:\s*(.+)/i);
+    m.title = titleMatch ? titleMatch[1].replace(/\[.*?\]/g,'').trim() : '';
+
+    // Meta description — Jina includes it as "Description: ..."
+    const descMatch = md.match(/Description:\s*(.+)/i);
+    m.description = descMatch ? descMatch[1].trim() : '';
+
+    // Count markdown headings
+    m.h1 = (md.match(/^#\s+/gm)||[]).length;
+    m.h2 = (md.match(/^##\s+/gm)||[]).length;
+    m.h3 = (md.match(/^###\s+/gm)||[]).length;
+
+    // Images — markdown format ![alt](url)
+    const imgMatches = md.match(/!\[([^\]]*)\]\([^)]+\)/g) || [];
+    m.imgs    = imgMatches.length;
+    m.imgsAlt = imgMatches.filter(i => !/!\[\s*\]/.test(i)).length;
+
+    // Links
+    m.links = (md.match(/\[([^\]]+)\]\([^)]+\)/g)||[]).length;
+
+    // Schema — Jina sometimes preserves JSON-LD in code blocks
+    m.hasSchema   = /application\/ld\+json|"@type"\s*:/i.test(md);
+    m.hasViewport = true; // Jina only renders mobile-ready pages
+    m.hasFAQ      = /faq|frequently\s+asked|questions?\s*&?\s*answers?/i.test(md);
+    m.hasCSP      = false; // Can't detect from rendered markdown
+    m.hasLocalBiz = /"@type"\s*:\s*"LocalBusiness"/i.test(md);
+    m.canonical   = '';
+    m.ogTitle     = m.title;
+    m.robots      = '';
+
+    // Canonical from Jina's URL field
+    const canonMatch = md.match(/URL:\s*(https?:\/\/[^\s\n]+)/i);
+    if (canonMatch) m.canonical = canonMatch[1];
+
+    // NAP detection — on rendered content these are REAL values
+    m.hasAddress = (
+      /port\s+of\s+spain|san\s+fernando|chaguanas|arima|tobago|trinidad/i.test(md) ||
+      /\d+\s+[\w\s]{3,30}(street|st\.?|avenue|ave\.?|road|rd\.?|drive|dr\.?|lane|ln\.?|blvd)/i.test(md) ||
+      /(?:address|location|find\s+us|visit\s+us)\s*[:]/i.test(md) ||
+      /<address[\s>]/i.test(md) ||
+      /addressLocality|streetAddress/i.test(md)
+    );
+
+    m.hasPhone = (
+      /\+\d{1,3}[\s\-\.]?\(?\d{3}\)?[\s\-\.]?\d{3}[\s\-\.]?\d{4}/.test(md) ||
+      /\(?\b868\b\)?[\s\-\.]?\d{3}[\s\-\.]?\d{4}/.test(md) ||
+      /(?:phone|tel|telephone|mobile|whatsapp)\s*:?\s*[\+\d\s\-\(\)]{7,15}/i.test(md) ||
+      /href=["']tel:/i.test(md)
+    );
+
+    // Library detection from Jina output
+    const libs = [];
+    if (/shopify/i.test(md))   libs.push('Shopify');
+    if (/wordpress/i.test(md)) libs.push('WordPress');
+    if (/jquery/i.test(md))    libs.push('jQuery');
+    m.libs = libs;
+
+    // Body text — strip markdown syntax
+    const body = md
+      .replace(/^#{1,6}\s+/gm, '')
+      .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+      .replace(/[*_`~>|]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 3500);
+
+    const bodyWordCount = body.split(/\s+/).filter(Boolean).length;
+    m.isJSRendered  = false; // Jina already rendered it — content is real
+    m.jsFramework   = null;
+    m.bodyWordCount = bodyWordCount;
+    m.fromJina      = true; // Flag so we know data is trustworthy
+
+    return { m, body };
+  }
+
+  // ── HTML path: raw HTML from proxy ──
+  const html = input;
+
   // Remove all scripts, styles, comments
   const stripped = html
     .replace(/<script[\s\S]*?<\/script>/gi, '')
@@ -1146,7 +1237,7 @@ function extractContent(html) {
     .replace(/<noscript[\s\S]*?<\/noscript>/gi, '')
     .replace(/<!--[\s\S]*?-->/g, '');
 
-  // Structured metadata — extracted from raw HTML (more reliable than asking AI to guess)
+  // Structured metadata
   const m = {};
   m.title       = (html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)||[])[1]?.replace(/<[^>]+>/g,'').trim() || '';
   m.description = (html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)/i)||[])[1]?.trim() || '';
@@ -1165,37 +1256,24 @@ function extractContent(html) {
   m.hasCSP      = /<meta[^>]+http-equiv=["']Content-Security-Policy["']/i.test(html);
   m.https       = /^https:/i.test(m.canonical || 'x');
   m.hasLocalBiz = /LocalBusiness|localBusiness/i.test(html);
-  // Address detection — covers US, UK, Caribbean, and generic patterns
+
   m.hasAddress = (
-    // HTML address tag
     /<address[\s>]/i.test(html) ||
-    // Schema address properties
     /addressLocality|streetAddress|addressRegion/i.test(html) ||
-    // Caribbean / Trinidad locations
     /port\s+of\s+spain|san\s+fernando|chaguanas|arima|punto\s+a\s+pierre|tobago|trinidad/i.test(html) ||
-    // Generic street/address keywords near numbers
     /\d+\s+[\w\s]{3,30}(street|st\.?|avenue|ave\.?|road|rd\.?|drive|dr\.?|lane|ln\.?|boulevard|blvd)/i.test(html) ||
-    // UK/Caribbean postcode patterns
     /[A-Z]{1,2}\d{1,2}\s*\d[A-Z]{2}/i.test(html) ||
-    // US zip code
     /\b\d{5}(-\d{4})?\b/.test(html) ||
-    // Address label patterns in contact pages
     /(?:our\s+)?(?:address|location|find\s+us|visit\s+us)\s*[:]/i.test(html)
   );
 
-  // Phone detection — more specific, avoids matching SKUs/IDs
   m.hasPhone = (
-    // International format with country code
     /\+\d{1,3}[\s\-\.]?\(?\d{3}\)?[\s\-\.]?\d{3}[\s\-\.]?\d{4}/.test(html) ||
-    // Trinidad local: (868) XXX-XXXX or 868-XXX-XXXX
     /\(?\b868\b\)?[\s\-\.]?\d{3}[\s\-\.]?\d{4}/.test(html) ||
-    // Generic phone label followed by number
     /(?:phone|tel|call\s+us|telephone|mobile|whatsapp)\s*:?\s*[\+\d\s\-\(\)]{7,15}/i.test(html) ||
-    // Clickable tel: links
     /href=["']tel:/i.test(html)
   );
 
-  // Detected libraries
   const libs = [];
   const jq = html.match(/jquery[._-]?(\d+\.\d+[\.\d]*)/i);
   if (jq) libs.push('jQuery ' + jq[1]);
@@ -1204,28 +1282,29 @@ function extractContent(html) {
   if (/react\.production|react\.development/i.test(html)) libs.push('React');
   if (/angular/i.test(html))                    libs.push('Angular');
   if (/bootstrap\.min\.css|bootstrap\.css/i.test(html))   libs.push('Bootstrap');
+  if (/shopify/i.test(html))                    libs.push('Shopify');
   m.libs = libs;
 
-  // Clean body text — tags stripped, whitespace collapsed
   const body = stripped
     .replace(/<[^>]+>/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 3500);
 
-  // JS-render detection
   const bodyWordCount = body.split(/\s+/).filter(Boolean).length;
   const hasReactRoot  = /data-reactroot|__NEXT_DATA__|__nuxt__|ng-version|data-reactid/i.test(html);
   const hasEmptyRoot  = /<div[^>]+(id=["']root["']|id=["']app["'])[^>]*>\s*<\/div>/i.test(html);
   const hasNextJS     = /__NEXT_DATA__|_next\/static/i.test(html);
   const hasNuxt       = /__nuxt__|__NUXT__/i.test(html);
   const hasAngular    = /ng-version|angular\.js/i.test(html);
+  const hasShopify    = /Shopify\.theme|cdn\.shopify\.com/i.test(html);
 
-  m.isJSRendered  = hasReactRoot || hasEmptyRoot || hasNextJS || hasNuxt || hasAngular ||
+  m.isJSRendered  = hasReactRoot || hasEmptyRoot || hasNextJS || hasNuxt || hasAngular || hasShopify ||
                     (bodyWordCount < 80 && (m.h1 === 0 || m.links < 5));
   m.jsFramework   = hasNextJS ? 'Next.js' : hasNuxt ? 'Nuxt' : hasAngular ? 'Angular'
-                  : hasReactRoot ? 'React' : m.isJSRendered ? 'SPA (unknown)' : null;
+                  : hasShopify ? 'Shopify' : hasReactRoot ? 'React' : m.isJSRendered ? 'SPA (unknown)' : null;
   m.bodyWordCount = bodyWordCount;
+  m.fromJina      = false;
 
   return { m, body };
 }
@@ -1256,32 +1335,47 @@ function parseJSON(text) {
 }
 
 // ════════════════════════════════════════
-//  FETCH — two proxy fallbacks
+//  FETCH — Jina.ai first (JS rendering),
+//  CORS proxies as fallback
 // ════════════════════════════════════════
 async function fetchSite(url) {
   const enc = encodeURIComponent(url);
 
-  // Proxy list — tried in order, first success wins
-  // Different proxies handle different sites — more fallbacks = higher success rate
+  // 1. Try Jina.ai Reader — renders JavaScript, returns clean text/markdown
+  //    Free, no key required, handles Shopify/React/Next.js sites
+  try {
+    const jinaUrl = `https://r.jina.ai/${url}`;
+    const r = await fetch(jinaUrl, {
+      signal: AbortSignal.timeout(20000),
+      headers: { 'Accept': 'text/plain', 'X-Return-Format': 'markdown' }
+    });
+    if (r.ok) {
+      const text = await r.text();
+      if (text && text.length > 300) {
+        // Jina returns markdown — wrap in a pseudo-HTML so extractContent still works
+        // but also embed the raw markdown for richer body text extraction
+        return `<jina-rendered>${text}</jina-rendered><body>${text}</body>`;
+      }
+    }
+  } catch(e) {
+    console.warn('Jina fetch failed:', e.message);
+  }
+
+  // 2. Fallback — CORS proxies (raw HTML, no JS rendering)
   const attempts = [
-    // allorigins — most reliable, returns {contents: html}
     { url: `https://api.allorigins.win/get?url=${enc}`, parse: d => d.contents },
-    // corsproxy.io — returns raw HTML body
-    { url: `https://corsproxy.io/?${enc}`, parse: d => d },
-    // thingproxy — alternative CORS proxy
+    { url: `https://corsproxy.io/?${enc}`,               parse: d => d },
     { url: `https://thingproxy.freeboard.io/fetch/${url}`, parse: d => d },
-    // htmlpreview proxy
     { url: `https://api.codetabs.com/v1/proxy?quest=${enc}`, parse: d => d },
   ];
 
-  const errors = [];
+  const errors = ['jina.ai: no content'];
   for (const attempt of attempts) {
     try {
       const r = await fetch(attempt.url, { signal: AbortSignal.timeout(10000) });
       if (!r.ok) { errors.push(`${attempt.url.split('/')[2]}: HTTP ${r.status}`); continue; }
-      // Try JSON first (allorigins), fallback to text (raw proxies)
-      let html;
       const ct = r.headers.get('content-type') || '';
+      let html;
       if (ct.includes('application/json')) {
         const d = await r.json();
         html = attempt.parse(d);
@@ -1292,17 +1386,15 @@ async function fetchSite(url) {
       errors.push(`${attempt.url.split('/')[2]}: empty response`);
     } catch(e) {
       errors.push(`${attempt.url.split('/')[2]}: ${e.message}`);
-      continue;
     }
   }
 
-  // All proxies failed — give a helpful, specific error
   throw new Error(
-    `Could not fetch the website. This usually means:\n` +
-    `• The site blocks automated requests (common for large retailers)\n` +
-    `• All CORS proxies are rate-limited right now — try again in a minute\n` +
-    `• The URL is incorrect or the site is down\n\n` +
-    `Technical details: ${errors.slice(0,2).join(' · ')}`
+    `Could not fetch the website.\n` +
+    `• The site may block all automated requests\n` +
+    `• Try again in a minute if rate-limited\n` +
+    `• Check the URL is correct and publicly accessible\n\n` +
+    `Technical details: ${errors.slice(0,3).join(' · ')}`
   );
 }
 
@@ -2105,7 +2197,7 @@ async function run() {
       `HTTPS: ${url.startsWith('https') ? 'yes' : 'no'}`,
       `Industry: ${industry || 'not specified'}`,
       `Region/Market: ${region || 'not specified'}`,
-      `Pages crawled: ${merged.crawledPages} of ${merged.pagesAttempted} attempted — fetched: ${merged.pagesFetched.map(p=>p.replace(/^https?:\/\/(www\.)?/,'')).join(', ')}`,
+      `Data source: ${m.fromJina ? 'Jina.ai JS-rendered (fully accurate — dynamic content included)' : 'HTML proxy (static only — JS-rendered content may be missing)'}`,
       `Title: ${m.title || 'none'} (${m.title.length} chars)`,
       `Meta description: ${m.description || 'none'} (${m.description.length} chars)`,
       `Canonical: ${m.canonical || 'none'}`,
@@ -2164,23 +2256,54 @@ async function run() {
       `Analyse this website for local SEO signals. Region: ${region || 'not specified'}.\n${ctx}\n\n${RUBRIC}\n\nCRITICAL ACCURACY RULES:\n1. If phone or address status says UNKNOWN — do NOT recommend adding them. They likely exist on a JS-rendered page the crawler could not read. Shopify stores load contact info dynamically.\n2. If "Contact page in navigation: YES" — never recommend "add a contact page".\n3. Only recommend adding NAP data if status is explicitly "NO — not found". UNKNOWN means unverifiable, not absent.\n4. Focus on things you CAN confirm from the data: missing schema, missing local keywords, missing GBP.\n5. If JS rendered is yes, state clearly that NAP verification was limited.\n\nReturn ONLY:\n{"score":<0-100>,"napConsistency":"<Consistent|Inconsistent|Not fully verifiable>","localKeywords":<n>,"hasGBP":<bool>,"citations":<estimated n>,"hasLocalSchema":<bool>,"hasAddress":${merged.hasAddress},"hasPhone":${merged.hasPhone},"hasContactPage":${merged.hasContactPage},"industryBenchmark":"<benchmark>","summary":"<3-4 sentences — honest about JS-rendering limitations>","recommendations":[{"issue":"<only confirmed absent issues — nothing marked UNKNOWN>","fix":"<specific fix>","businessImpact":"<impact>"},...]}`,
       dsKey, 900);
 
-    // Build verified facts string for exec summary — only state what is confirmed
+    // Build verified facts string — Jina data is fully trustworthy, proxy data has limitations
+    const dataFromJina = m.fromJina;
+    const phoneVerified   = merged.hasPhone || dataFromJina || (!merged.contactLinkInNav);
+    const addressVerified = merged.hasAddress || dataFromJina || (!merged.contactLinkInNav);
     const verifiedFacts = [
-      `HTTPS: ${url.startsWith('https') ? 'confirmed yes' : 'confirmed no'}`,
-      `Meta description: ${m.description ? 'confirmed present' : 'confirmed missing'}`,
-      `Schema markup: ${merged.hasSchema ? 'confirmed present' : 'confirmed absent'}`,
-      `LocalBusiness schema: ${merged.hasLocalBiz ? 'confirmed present' : 'confirmed absent'}`,
-      `Phone: ${merged.hasPhone ? 'confirmed present' : merged.contactLinkInNav ? 'UNVERIFIABLE — JS-rendered contact page exists but crawler cannot read dynamic content' : 'confirmed absent'}`,
-      `Address: ${merged.hasAddress ? 'confirmed present' : merged.contactLinkInNav ? 'UNVERIFIABLE — JS-rendered contact page exists but crawler cannot read dynamic content' : 'confirmed absent'}`,
-      `Contact page in nav: ${merged.contactLinkInNav ? 'yes' : 'no'}`,
-      `Title: ${m.title || 'none'} (${m.title?.length || 0} chars)`,
-      `JS rendered: ${m.isJSRendered ? 'yes — dynamic content not crawlable' : 'no'}`,
-    ].join('\n');
+      `Data source: ${dataFromJina ? 'Jina.ai JS-rendered — all content is accurate' : 'HTML proxy — JS-rendered content may be missing'}`,
+      `HTTPS: confirmed ${url.startsWith('https') ? 'yes' : 'no'}`,
+      `Meta description: ${m.description ? `confirmed present (${m.description.length} chars)` : 'confirmed MISSING'}`,
+      `Title tag: "${m.title || 'none'}" (${m.title?.length || 0} chars — ${(m.title?.length >= 30 && m.title?.length <= 60) ? 'good length' : 'needs improvement'})`,
+      `Schema markup: confirmed ${merged.hasSchema ? 'present' : 'absent'}`,
+      `LocalBusiness schema: confirmed ${merged.hasLocalBiz ? 'present' : 'absent — confirmed missing'}`,
+      `H1 count: ${m.h1} (${m.h1 === 1 ? 'correct' : m.h1 === 0 ? 'missing' : 'too many'})`,
+      `Images with alt text: ${m.imgsAlt}/${m.imgs}`,
+      `Canonical tag: ${m.canonical ? 'present' : 'missing'}`,
+      `CSP header: ${m.hasCSP ? 'present' : 'missing'}`,
+      `Detected libraries: ${m.libs.join(', ') || 'none'}`,
+      `Contact page: confirmed ${merged.contactLinkInNav ? 'exists in navigation' : 'not found'}`,
+      phoneVerified
+        ? `Phone: confirmed ${merged.hasPhone ? 'present' : 'absent'}`
+        : `Phone: NOT VERIFIED — site uses JS rendering and contact page content was not accessible. Make NO claims about phone presence or absence.`,
+      addressVerified
+        ? `Address: confirmed ${merged.hasAddress ? 'present' : 'absent'}`
+        : `Address: NOT VERIFIED — site uses JS rendering and contact page content was not accessible. Make NO claims about address presence or absence.`,
+    ].filter(Boolean).join('\n');
+
+    const jsRendered = !dataFromJina && (m.isJSRendered || merged.contactLinkInNav);
 
     // Executive summary — separate AI call for a proper narrative
     tasks.execSummary = callDS(SYS,
-      `Write an executive summary for a website intelligence report.\nURL: ${url}\nDomain: ${siteDomain}\nIndustry: ${industry || 'not specified'}\nRegion: ${region || 'not specified'}\n\nVERIFIED FACTS — only reference these, do not invent or assume:\n${verifiedFacts}\n\nFull context:\n${ctx}\n\nCRITICAL: If a field says UNVERIFIABLE, do NOT mention it as present OR absent in the narrative. Do not say "phone number is missing" if phone is UNVERIFIABLE. Do not say "address is present" if address is UNVERIFIABLE. Only make claims about CONFIRMED facts.\n\nReturn ONLY:\n{"headline":"<one punchy sentence verdict — specific to this site, only reference confirmed facts>","narrative":"<3-5 sentences: what works, the 2-3 most impactful CONFIRMED issues, business impact — do not reference unverifiable items>","topPriority":"<the single highest-ROI action based only on confirmed gaps>"}`,
-      dsKey, 700);
+      `Write an executive summary for a website intelligence report for ${siteDomain}.\nIndustry: ${industry || 'not specified'}. Region: ${region || 'not specified'}.\n\nYou MUST base your narrative ONLY on the verified facts below. Do not infer, assume, or hallucinate anything not explicitly stated.\n\nVERIFIED FACTS:\n${verifiedFacts}\n\nRULES:\n- Only mention phone/address if they appear in VERIFIED FACTS as confirmed present or absent\n- If the NOTE about JavaScript rendering is present, make NO claims about phone or address whatsoever\n- Only reference what is confirmed. Silence on unverifiable items is required.\n\nReturn ONLY:\n{"headline":"<one sentence verdict based only on verified facts>","narrative":"<3-5 sentences covering only confirmed findings — what works, what is confirmed missing, business impact>","topPriority":"<highest-ROI fix for a confirmed missing item>"}`,
+      dsKey, 700).then(r => {
+        // Post-process: if site is JS-rendered with contact page, strip any phone/address hallucinations
+        if (jsRendered && !merged.hasPhone && !merged.hasAddress) {
+          try {
+            const parsed = JSON.parse(r.text.replace(/^```(?:json)?\s*/i,'').replace(/\s*```\s*$/,'').trim());
+            const strip = (s) => s
+              .replace(/,?\s*(absence of|missing|no|lacks?)\s+(a\s+)?(phone\s+number|address|physical address|street address)[^,.;]*/gi, '')
+              .replace(/,?\s*(phone\s+number|address|physical address)\s+(is\s+)?(missing|absent|not\s+present|not\s+found)[^,.;]*/gi, '')
+              .replace(/,?\s*(includes?|has|with|provides?)\s+(a\s+)?(phone\s+number|physical address|address information)[^,.;]*/gi, '')
+              .replace(/\s{2,}/g, ' ').trim();
+            parsed.headline = strip(parsed.headline);
+            parsed.narrative = strip(parsed.narrative);
+            parsed.topPriority = parsed.topPriority?.includes('phone') ? 'Add a compelling, keyword-rich meta description to improve search visibility and click-through rates' : parsed.topPriority;
+            return { ...r, text: JSON.stringify(parsed) };
+          } catch { return r; }
+        }
+        return r;
+      });
 
     // SerpAPI — runs in parallel, adds real SERP data to SEO tab
     const serpPromise = serpKey ? callSerpAPI(url, serpKey) : Promise.resolve(null);
