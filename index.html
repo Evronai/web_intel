@@ -2052,6 +2052,12 @@ async function run() {
     const allPages = [{ m, body, pageUrl: url }, ...subPageData];
 
     // Track which specific pages were successfully crawled
+    // Track which pages were attempted but failed
+    const failedSubPages = subPageResults
+      .filter(r => r.status === 'fulfilled' && r.value && !r.value.success)
+      .map(r => r.value.pageUrl)
+      .filter(Boolean);
+
     const successfulSubPages = subPageData.map(p => p.pageUrl);
     const contactPagesCrawled = allPages
       .filter(p => /contact|about|store|location/i.test(p.pageUrl || ''))
@@ -2061,6 +2067,10 @@ async function run() {
         hasPhone:   p.m?.hasPhone   || false,
       }));
 
+    // Check if a contact page exists in nav links even if we couldn't fetch it
+    const contactLinkExists = /href=["'][^"']*contact[^"']*/i.test(html);
+    const aboutLinkExists   = /href=["'][^"']*about[^"']*/i.test(html);
+
     // A signal is TRUE if found on ANY crawled page
     const merged = {
       hasAddress:          allPages.some(p => p.m?.hasAddress),
@@ -2068,13 +2078,24 @@ async function run() {
       hasLocalBiz:         allPages.some(p => p.m?.hasLocalBiz),
       hasFAQ:              allPages.some(p => p.m?.hasFAQ),
       hasSchema:           allPages.some(p => p.m?.hasSchema),
-      hasContactPage:      contactPagesCrawled.length > 0,
+      hasContactPage:      contactPagesCrawled.length > 0 || contactLinkExists,
+      contactPageFetched:  contactPagesCrawled.length > 0,
+      contactLinkInNav:    contactLinkExists,
+      aboutLinkInNav:      aboutLinkExists,
+      failedPages:         failedSubPages,
       contactPagesDetail:  contactPagesCrawled,
       pagesWithContact:    allPages.filter(p => p.m?.hasAddress || p.m?.hasPhone).length,
       crawledPages:        allPages.length,
       pagesFetched:        [url, ...successfulSubPages],
       pagesAttempted:      pagesToCheck.length + 1,
     };
+
+    // Build contact page text excerpt for AI context
+    const contactPageExcerpt = subPageData
+      .filter(p => /contact/i.test(p.pageUrl || ''))
+      .map(p => p.body?.slice(0, 800) || '')
+      .join(' ')
+      .trim();
 
     setProgress(20, 'Extracting content…', `Analysed ${merged.crawledPages} pages`);
 
@@ -2095,9 +2116,10 @@ async function run() {
       `Links: ${m.links}`,
       `Schema markup (any page): ${merged.hasSchema ? 'yes' : 'no'}`,
       `LocalBusiness schema (any page): ${merged.hasLocalBiz ? 'yes' : 'no'}`,
-      `Address found (any page): ${merged.hasAddress ? 'YES — address text detected on at least one page' : 'NO — no address text found on any crawled page (including contact page if present)'}`,
-      `Phone found (any page): ${merged.hasPhone ? 'YES — phone number detected on at least one page' : 'NO — no phone number found on any crawled page'}`,
-      `Contact page exists: ${merged.hasContactPage ? 'YES — crawled, but contained: address=' + (merged.contactPagesDetail.some(p=>p.hasAddress)?'found':'NOT FOUND') + ', phone=' + (merged.contactPagesDetail.some(p=>p.hasPhone)?'found':'NOT FOUND') : 'not detected in crawl'}`,
+      `Address found (any page): ${merged.hasAddress ? 'YES — address text detected' : (merged.contactLinkInNav && (m.isJSRendered || !merged.contactPageFetched)) ? 'UNKNOWN — contact page exists in navigation but content is JavaScript-rendered so crawler cannot read it. Do NOT flag as missing — address may well be present.' : 'NO — not found on any crawled page'}`,
+      `Phone found (any page): ${merged.hasPhone ? 'YES — phone number detected' : (merged.contactLinkInNav && (m.isJSRendered || !merged.contactPageFetched)) ? 'UNKNOWN — contact page exists in navigation but content is JavaScript-rendered so crawler cannot read it. Do NOT flag as missing — phone may well be present.' : 'NO — not found on any crawled page'}`,
+      `Contact page in navigation: ${merged.contactLinkInNav ? 'YES — link exists in site navigation' : 'no'}`,
+      `Contact page successfully fetched: ${merged.contactPageFetched ? 'YES' : 'NO — page blocked proxy fetch'}`,
       `FAQ content (any page): ${merged.hasFAQ ? 'yes' : 'no'}`,
       `Pages with contact info: ${merged.pagesWithContact} of ${merged.crawledPages}`,
       `Viewport meta: ${m.hasViewport ? 'yes' : 'no'}`,
@@ -2139,7 +2161,7 @@ async function run() {
       dsKey, 900);
 
     if (mods.local) tasks.local = callDS(SYS,
-      `Analyse this website for local SEO signals. Region: ${region || 'not specified'}. Base assessment ONLY on signals from the data below — which covers ${merged.crawledPages} crawled pages including contact/about pages.\n${ctx}\n\n${RUBRIC}\n\nCRITICAL ACCURACY RULES:\n1. The data explicitly states whether address and phone were found. Trust these values absolutely — do NOT contradict them.\n2. If "Contact page exists: YES" but address=NOT FOUND, the contact page EXISTS but has NO address. Do NOT recommend "add a contact page" — recommend "add address details TO the existing contact page".\n3. If address=NOT FOUND, you MAY recommend adding an address. If address=found, NEVER recommend adding one.\n4. Only flag things genuinely absent from all crawled pages.\n\nReturn ONLY:\n{"score":<0-100>,"napConsistency":"<Consistent|Inconsistent|Not detected>","localKeywords":<n>,"hasGBP":<bool>,"citations":<estimated n>,"hasLocalSchema":<bool>,"hasAddress":${merged.hasAddress},"hasPhone":${merged.hasPhone},"hasContactPage":${merged.hasContactPage},"industryBenchmark":"<benchmark>","summary":"<3-4 sentences — reference exactly what was and was not found>","recommendations":[{"issue":"<specific gap>","fix":"<specific fix that reflects actual site state>","businessImpact":"<impact>"},...]}`,
+      `Analyse this website for local SEO signals. Region: ${region || 'not specified'}.\n${ctx}\n\n${RUBRIC}\n\nCRITICAL ACCURACY RULES:\n1. If phone or address status says UNKNOWN — do NOT recommend adding them. They likely exist on a JS-rendered page the crawler could not read. Shopify stores load contact info dynamically.\n2. If "Contact page in navigation: YES" — never recommend "add a contact page".\n3. Only recommend adding NAP data if status is explicitly "NO — not found". UNKNOWN means unverifiable, not absent.\n4. Focus on things you CAN confirm from the data: missing schema, missing local keywords, missing GBP.\n5. If JS rendered is yes, state clearly that NAP verification was limited.\n\nReturn ONLY:\n{"score":<0-100>,"napConsistency":"<Consistent|Inconsistent|Not fully verifiable>","localKeywords":<n>,"hasGBP":<bool>,"citations":<estimated n>,"hasLocalSchema":<bool>,"hasAddress":${merged.hasAddress},"hasPhone":${merged.hasPhone},"hasContactPage":${merged.hasContactPage},"industryBenchmark":"<benchmark>","summary":"<3-4 sentences — honest about JS-rendering limitations>","recommendations":[{"issue":"<only confirmed absent issues — nothing marked UNKNOWN>","fix":"<specific fix>","businessImpact":"<impact>"},...]}`,
       dsKey, 900);
 
     // Executive summary — separate AI call for a proper narrative
