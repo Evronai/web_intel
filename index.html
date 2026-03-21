@@ -1185,21 +1185,32 @@ function extractContent(input) {
     const canonMatch = md.match(/URL:\s*(https?:\/\/[^\s\n]+)/i);
     if (canonMatch) m.canonical = canonMatch[1];
 
-    // NAP detection — on rendered content these are REAL values
-    m.hasAddress = (
-      /port\s+of\s+spain|san\s+fernando|chaguanas|arima|tobago|trinidad/i.test(md) ||
-      /\d+\s+[\w\s]{3,30}(street|st\.?|avenue|ave\.?|road|rd\.?|drive|dr\.?|lane|ln\.?|blvd)/i.test(md) ||
-      /(?:address|location|find\s+us|visit\s+us)\s*[:]/i.test(md) ||
-      /<address[\s>]/i.test(md) ||
-      /addressLocality|streetAddress/i.test(md)
-    );
+    // --------------------------
+    // IMPROVED: phone detection
+    // --------------------------
+    const phonePattern = /(?:\+\d{1,3}\s*)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/i;
+    const hasTelLink = /\[.*?\]\(tel:/i.test(md);
+    const hasPhoneText = phonePattern.test(md);
+    const hasTrinidadPhone = /\(?868\)?[\s.-]?\d{3}[\s.-]?\d{4}/i.test(md);
+    m.hasPhone = hasTelLink || hasPhoneText || hasTrinidadPhone;
 
-    m.hasPhone = (
-      /\+\d{1,3}[\s\-\.]?\(?\d{3}\)?[\s\-\.]?\d{3}[\s\-\.]?\d{4}/.test(md) ||
-      /\(?\b868\b\)?[\s\-\.]?\d{3}[\s\-\.]?\d{4}/.test(md) ||
-      /(?:phone|tel|telephone|mobile|whatsapp)\s*:?\s*[\+\d\s\-\(\)]{7,15}/i.test(md) ||
-      /href=["']tel:/i.test(md)
-    );
+    // --------------------------
+    // IMPROVED: address detection
+    // --------------------------
+    const addressPatterns = [
+      /\baddress\b[:\s]+/i,
+      /streetAddress|addressLocality|postalCode/i,
+      /(?:p\.?o\.?\s+box|mailbox)/i,
+      /port\s+of\s+spain|san\s+fernando|chaguanas|arima|tobago|trinidad/i,
+      /\d+\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\s+(?:street|st\.?|avenue|ave\.?|road|rd\.?|drive|dr\.?|lane|ln\.?|boulevard|blvd)/i,
+      /[A-Z]{1,2}\d{1,2}\s*\d[A-Z]{2}/i,
+      /\b\d{5}(?:-\d{4})?\b/,
+      /contact\s+information/i,
+      /store\s+name:\s*/i,
+      /location\s*[:;]/i
+    ];
+    m.hasAddress = addressPatterns.some(p => p.test(md));
+    m.hasContactInfoBlock = /contact\s+information|store\s+name:\s*/i.test(md);
 
     // Library detection from Jina output
     const libs = [];
@@ -1257,23 +1268,34 @@ function extractContent(input) {
   m.https       = /^https:/i.test(m.canonical || 'x');
   m.hasLocalBiz = /LocalBusiness|localBusiness/i.test(html);
 
-  m.hasAddress = (
-    /<address[\s>]/i.test(html) ||
-    /addressLocality|streetAddress|addressRegion/i.test(html) ||
-    /port\s+of\s+spain|san\s+fernando|chaguanas|arima|punto\s+a\s+pierre|tobago|trinidad/i.test(html) ||
-    /\d+\s+[\w\s]{3,30}(street|st\.?|avenue|ave\.?|road|rd\.?|drive|dr\.?|lane|ln\.?|boulevard|blvd)/i.test(html) ||
-    /[A-Z]{1,2}\d{1,2}\s*\d[A-Z]{2}/i.test(html) ||
-    /\b\d{5}(-\d{4})?\b/.test(html) ||
-    /(?:our\s+)?(?:address|location|find\s+us|visit\s+us)\s*[:]/i.test(html)
-  );
+  // --------------------------
+  // IMPROVED: address detection
+  // --------------------------
+  const addressPatterns = [
+    /<address[\s>]/i,
+    /addressLocality|streetAddress|addressRegion/i,
+    /port\s+of\s+spain|san\s+fernando|chaguanas|arima|punto\s+a\s+pierre|tobago|trinidad/i,
+    /\d+\s+[\w\s]{3,30}(street|st\.?|avenue|ave\.?|road|rd\.?|drive|dr\.?|lane|ln\.?|boulevard|blvd)/i,
+    /[A-Z]{1,2}\d{1,2}\s*\d[A-Z]{2}/i,
+    /\b\d{5}(-\d{4})?\b/,
+    /(?:our\s+)?(?:address|location|find\s+us|visit\s+us)\s*[:]/i,
+    /contact\s+information/i,
+    /store\s+name:\s*/i,
+    /location\s*[:;]/i
+  ];
+  m.hasAddress = addressPatterns.some(p => p.test(html));
+  m.hasContactInfoBlock = /contact\s+information|store\s+name:\s*/i.test(html);
 
-  m.hasPhone = (
-    /\+\d{1,3}[\s\-\.]?\(?\d{3}\)?[\s\-\.]?\d{3}[\s\-\.]?\d{4}/.test(html) ||
-    /\(?\b868\b\)?[\s\-\.]?\d{3}[\s\-\.]?\d{4}/.test(html) ||
-    /(?:phone|tel|call\s+us|telephone|mobile|whatsapp)\s*:?\s*[\+\d\s\-\(\)]{7,15}/i.test(html) ||
-    /href=["']tel:/i.test(html)
-  );
+  // --------------------------
+  // IMPROVED: phone detection
+  // --------------------------
+  const phonePattern = /(?:\+\d{1,3}\s*)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/i;
+  const hasTelLink = /<a[^>]+href=["']tel:[^"']+["']/i.test(html);
+  const hasPhoneText = phonePattern.test(html);
+  const hasTrinidadPhone = /\(?868\)?[\s.-]?\d{3}[\s.-]?\d{4}/i.test(html);
+  m.hasPhone = hasTelLink || hasPhoneText || hasTrinidadPhone;
 
+  // Library detection
   const libs = [];
   const jq = html.match(/jquery[._-]?(\d+\.\d+[\.\d]*)/i);
   if (jq) libs.push('jQuery ' + jq[1]);
@@ -2108,17 +2130,22 @@ async function run() {
     const origin  = new URL(url).origin;
 
     // Common pages that contain NAP, contact info, local signals
-    const subPageSlugs = ['/contact', '/contact-us', '/about', '/about-us', '/store', '/locations'];
-    // Also check links in homepage HTML for actual contact/about hrefs
-    const linkedPages = [...html.matchAll(/href=["']([^"']*(?:contact|about|store|location)[^"']*)/gi)]
-      .map(match => {
+    const subPageSlugs = [
+      '/contact', '/contact-us', '/contactus', '/contact/', '/contact-us/',
+      '/about', '/about-us', '/aboutus',
+      '/store', '/locations', '/find-us', '/visit-us', '/hours', '/reach-out'
+    ];
+    const linkedPages = [...html.matchAll(/href=["']([^"']*?)["']/gi)]
+      .map(match => match[1])
+      .filter(href => /contact|about|store|location|find|visit|hours|reach/i.test(href))
+      .map(href => {
         try {
-          const u = new URL(match[1], url);
+          const u = new URL(href, url);
           return u.origin === origin ? u.href : null;
         } catch { return null; }
       })
       .filter(Boolean)
-      .slice(0, 3);
+      .slice(0, 5);
 
     const pagesToCheck = [...new Set([
       ...subPageSlugs.map(s => origin + s),
@@ -2171,6 +2198,7 @@ async function run() {
       hasFAQ:              allPages.some(p => p.m?.hasFAQ),
       hasSchema:           allPages.some(p => p.m?.hasSchema),
       hasContactPage:      contactPagesCrawled.length > 0 || contactLinkExists,
+      hasContactInfoBlock: allPages.some(p => p.m?.hasContactInfoBlock),
       contactPageFetched:  contactPagesCrawled.length > 0,
       contactLinkInNav:    contactLinkExists,
       aboutLinkInNav:      aboutLinkExists,
@@ -2211,6 +2239,7 @@ async function run() {
       `Address found (any page): ${merged.hasAddress ? 'YES — address text detected' : (merged.contactLinkInNav && (m.isJSRendered || !merged.contactPageFetched)) ? 'UNKNOWN — contact page exists in navigation but content is JavaScript-rendered so crawler cannot read it. Do NOT flag as missing — address may well be present.' : 'NO — not found on any crawled page'}`,
       `Phone found (any page): ${merged.hasPhone ? 'YES — phone number detected' : (merged.contactLinkInNav && (m.isJSRendered || !merged.contactPageFetched)) ? 'UNKNOWN — contact page exists in navigation but content is JavaScript-rendered so crawler cannot read it. Do NOT flag as missing — phone may well be present.' : 'NO — not found on any crawled page'}`,
       `Contact page in navigation: ${merged.contactLinkInNav ? 'YES — link exists in site navigation' : 'no'}`,
+      `Contact info block detected (any page): ${merged.hasContactInfoBlock ? 'YES — contact information section found' : 'NO'}`,
       `Contact page successfully fetched: ${merged.contactPageFetched ? 'YES' : 'NO — page blocked proxy fetch'}`,
       `FAQ content (any page): ${merged.hasFAQ ? 'yes' : 'no'}`,
       `Pages with contact info: ${merged.pagesWithContact} of ${merged.crawledPages}`,
@@ -2253,7 +2282,7 @@ async function run() {
       dsKey, 900);
 
     if (mods.local) tasks.local = callDS(SYS,
-      `Analyse this website for local SEO signals. Region: ${region || 'not specified'}.\n${ctx}\n\n${RUBRIC}\n\nCRITICAL ACCURACY RULES:\n1. If phone or address status says UNKNOWN — do NOT recommend adding them. They likely exist on a JS-rendered page the crawler could not read. Shopify stores load contact info dynamically.\n2. If "Contact page in navigation: YES" — never recommend "add a contact page".\n3. Only recommend adding NAP data if status is explicitly "NO — not found". UNKNOWN means unverifiable, not absent.\n4. Focus on things you CAN confirm from the data: missing schema, missing local keywords, missing GBP.\n5. If JS rendered is yes, state clearly that NAP verification was limited.\n\nReturn ONLY:\n{"score":<0-100>,"napConsistency":"<Consistent|Inconsistent|Not fully verifiable>","localKeywords":<n>,"hasGBP":<bool>,"citations":<estimated n>,"hasLocalSchema":<bool>,"hasAddress":${merged.hasAddress},"hasPhone":${merged.hasPhone},"hasContactPage":${merged.hasContactPage},"industryBenchmark":"<benchmark>","summary":"<3-4 sentences — honest about JS-rendering limitations>","recommendations":[{"issue":"<only confirmed absent issues — nothing marked UNKNOWN>","fix":"<specific fix>","businessImpact":"<impact>"},...]}`,
+      `Analyse this website for local SEO signals. Region: ${region || 'not specified'}.\n${ctx}\n\n${RUBRIC}\n\nCRITICAL ACCURACY RULES:\n1. If phone or address status says UNKNOWN — do NOT recommend adding them. They likely exist on a JS-rendered page the crawler could not read. Shopify stores load contact info dynamically.\n2. If "Contact page in navigation: YES" — never recommend "add a contact page".\n3. If "Contact info block detected: YES" — treat as strong evidence that NAP exists even if not directly extracted.\n4. Only recommend adding NAP data if status is explicitly "NO — not found". UNKNOWN means unverifiable, not absent.\n5. Focus on things you CAN confirm from the data: missing schema, missing local keywords, missing GBP.\n6. If JS rendered is yes, state clearly that NAP verification was limited.\n\nReturn ONLY:\n{"score":<0-100>,"napConsistency":"<Consistent|Inconsistent|Not fully verifiable>","localKeywords":<n>,"hasGBP":<bool>,"citations":<estimated n>,"hasLocalSchema":<bool>,"hasAddress":${merged.hasAddress},"hasPhone":${merged.hasPhone},"hasContactPage":${merged.hasContactPage},"industryBenchmark":"<benchmark>","summary":"<3-4 sentences — honest about JS-rendering limitations>","recommendations":[{"issue":"<only confirmed absent issues — nothing marked UNKNOWN>","fix":"<specific fix>","businessImpact":"<impact>"},...]}`,
       dsKey, 900);
 
     // Build verified facts string — Jina data is fully trustworthy, proxy data has limitations
@@ -2279,6 +2308,7 @@ async function run() {
       addressVerified
         ? `Address: confirmed ${merged.hasAddress ? 'present' : 'absent'}`
         : `Address: NOT VERIFIED — site uses JS rendering and contact page content was not accessible. Make NO claims about address presence or absence.`,
+      `Contact info block: ${merged.hasContactInfoBlock ? 'confirmed present' : 'not detected'}`,
     ].filter(Boolean).join('\n');
 
     const jsRendered = !dataFromJina && (m.isJSRendered || merged.contactLinkInNav);
