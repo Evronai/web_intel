@@ -2164,10 +2164,23 @@ async function run() {
       `Analyse this website for local SEO signals. Region: ${region || 'not specified'}.\n${ctx}\n\n${RUBRIC}\n\nCRITICAL ACCURACY RULES:\n1. If phone or address status says UNKNOWN — do NOT recommend adding them. They likely exist on a JS-rendered page the crawler could not read. Shopify stores load contact info dynamically.\n2. If "Contact page in navigation: YES" — never recommend "add a contact page".\n3. Only recommend adding NAP data if status is explicitly "NO — not found". UNKNOWN means unverifiable, not absent.\n4. Focus on things you CAN confirm from the data: missing schema, missing local keywords, missing GBP.\n5. If JS rendered is yes, state clearly that NAP verification was limited.\n\nReturn ONLY:\n{"score":<0-100>,"napConsistency":"<Consistent|Inconsistent|Not fully verifiable>","localKeywords":<n>,"hasGBP":<bool>,"citations":<estimated n>,"hasLocalSchema":<bool>,"hasAddress":${merged.hasAddress},"hasPhone":${merged.hasPhone},"hasContactPage":${merged.hasContactPage},"industryBenchmark":"<benchmark>","summary":"<3-4 sentences — honest about JS-rendering limitations>","recommendations":[{"issue":"<only confirmed absent issues — nothing marked UNKNOWN>","fix":"<specific fix>","businessImpact":"<impact>"},...]}`,
       dsKey, 900);
 
+    // Build verified facts string for exec summary — only state what is confirmed
+    const verifiedFacts = [
+      `HTTPS: ${url.startsWith('https') ? 'confirmed yes' : 'confirmed no'}`,
+      `Meta description: ${m.description ? 'confirmed present' : 'confirmed missing'}`,
+      `Schema markup: ${merged.hasSchema ? 'confirmed present' : 'confirmed absent'}`,
+      `LocalBusiness schema: ${merged.hasLocalBiz ? 'confirmed present' : 'confirmed absent'}`,
+      `Phone: ${merged.hasPhone ? 'confirmed present' : merged.contactLinkInNav ? 'UNVERIFIABLE — JS-rendered contact page exists but crawler cannot read dynamic content' : 'confirmed absent'}`,
+      `Address: ${merged.hasAddress ? 'confirmed present' : merged.contactLinkInNav ? 'UNVERIFIABLE — JS-rendered contact page exists but crawler cannot read dynamic content' : 'confirmed absent'}`,
+      `Contact page in nav: ${merged.contactLinkInNav ? 'yes' : 'no'}`,
+      `Title: ${m.title || 'none'} (${m.title?.length || 0} chars)`,
+      `JS rendered: ${m.isJSRendered ? 'yes — dynamic content not crawlable' : 'no'}`,
+    ].join('\n');
+
     // Executive summary — separate AI call for a proper narrative
     tasks.execSummary = callDS(SYS,
-      `Write an executive summary for a website intelligence report.\nURL: ${url}\nDomain: ${siteDomain}\nIndustry: ${industry || 'not specified'}\nRegion: ${region || 'not specified'}\nOverall score: will be calculated from Security, SEO, AI Search, Local scores.\nKey data:\n${ctx}\n\nReturn ONLY:\n{"headline":"<one punchy sentence verdict — specific to this site>","narrative":"<3-5 sentences: what the site does well, the 2-3 most impactful issues, what fixing them would mean for the business — write as a consultant, not a bot>","topPriority":"<the single highest-ROI action they should take first>"}`,
-      dsKey, 600);
+      `Write an executive summary for a website intelligence report.\nURL: ${url}\nDomain: ${siteDomain}\nIndustry: ${industry || 'not specified'}\nRegion: ${region || 'not specified'}\n\nVERIFIED FACTS — only reference these, do not invent or assume:\n${verifiedFacts}\n\nFull context:\n${ctx}\n\nCRITICAL: If a field says UNVERIFIABLE, do NOT mention it as present OR absent in the narrative. Do not say "phone number is missing" if phone is UNVERIFIABLE. Do not say "address is present" if address is UNVERIFIABLE. Only make claims about CONFIRMED facts.\n\nReturn ONLY:\n{"headline":"<one punchy sentence verdict — specific to this site, only reference confirmed facts>","narrative":"<3-5 sentences: what works, the 2-3 most impactful CONFIRMED issues, business impact — do not reference unverifiable items>","topPriority":"<the single highest-ROI action based only on confirmed gaps>"}`,
+      dsKey, 700);
 
     // SerpAPI — runs in parallel, adds real SERP data to SEO tab
     const serpPromise = serpKey ? callSerpAPI(url, serpKey) : Promise.resolve(null);
